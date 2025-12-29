@@ -21,7 +21,7 @@ active_chats = {}
 # === НАСТРОЙКИ ===
 ADMIN_ID = 5761885649  # Твой ID
 CHANNEL_LINK = "https://t.me/interandhelpfull"  # Твой канал
-CRYPTO_PROVIDER_TOKEN = os.getenv("CRYPTO_PROVIDER_TOKEN")  # Токен из Railway Variables
+CRYPTO_PROVIDER_TOKEN = os.getenv("CRYPTO_PROVIDER_TOKEN")
 
 VIP_PRICE = 14900
 BOOST_PRICE = 4900
@@ -100,7 +100,7 @@ async def find_match(user_id: int):
 
     async with aiosqlite.connect(DB_NAME) as db:
         rows = await db.execute_fetchall("""
-            SELECT u.user_id, u.gender, u.pref_gender FROM users u
+            SELECT u.user_id, u.gender, u.age FROM users u
             LEFT JOIN blocks b1 ON b1.blocker_id = ? AND b1.blocked_id = u.user_id
             LEFT JOIN blocks b2 ON b2.blocker_id = u.user_id AND b2.blocked_id = ?
             WHERE u.user_id != ?
@@ -108,14 +108,14 @@ async def find_match(user_id: int):
             AND b1.blocked_id IS NULL
             AND b2.blocked_id IS NULL
             ORDER BY u.boost_until > ? DESC, RANDOM()
-            LIMIT 50
         """, (user_id, user_id, user_id, pref_min, pref_max, now))
 
         candidates = []
         for row in rows:
-            cand_id, cand_gender, cand_pref = row
+            cand_id, cand_gender, cand_age = row
+            cand_pref = (await get_user(cand_id))[2]  # pref_gender кандидата
             if (cand_pref == "all" or cand_pref == my_gender) and (pref_gender == "all" or pref_gender == cand_gender):
-                candidates.append(cand_id)
+                candidates.append((cand_id, cand_gender, cand_age))
 
         if candidates:
             return choice(candidates)
@@ -206,17 +206,19 @@ async def process_max_age(message: types.Message, state: FSMContext):
 
 @dp.message(Command("search"))
 async def search(message: types.Message):
-    match_id = await find_match(message.from_user.id)
-    if not match_id:
-        await message.answer("Пока никого нет 😔 Попробуй позже или /reset")
+    match = await find_match(message.from_user.id)
+    if not match:
+        await message.answer("Пока никого нет по твоим критериям 😔\nПопробуй позже или измени настройки (/reset)")
         return
-    match_user = await get_user(match_id)
-    gender_text = "Парень" if match_user[1] == "m" else "Девушка"
-    await message.answer(f"Анкета:\n{gender_text}, {match_user[3]} лет\n\n❤️ или 👎?",
-                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                             [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
-                             [InlineKeyboardButton(text="👎 Дислайк", callback_data=f"dislike_{match_id}")]
-                         ]))
+    match_id, gender, age = match
+    gender_text = "Парень" if gender == "m" else "Девушка"
+    await message.answer(
+        f"Нашёл анкету!\n{gender_text}, {age} лет\n\n❤️ или 👎?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
+            [InlineKeyboardButton(text="👎 Дислайк", callback_data=f"dislike_{match_id}")]
+        ])
+    )
 
 @dp.callback_query(F.data.startswith("dislike_"))
 async def dislike(callback: types.CallbackQuery):
@@ -225,7 +227,7 @@ async def dislike(callback: types.CallbackQuery):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", (my_id, target_id))
         await db.commit()
-    await callback.message.edit_text("👎 Пропущено. Ищем дальше...")
+    await callback.message.edit_text("👎 Дислайк. Ищем следующую анкету...")
     await search(callback.message)
 
 @dp.callback_query(F.data.startswith("like_"))
@@ -233,14 +235,16 @@ async def like(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[1])
     my_id = callback.from_user.id
 
-    if await find_match(target_id) == my_id:
+    # Проверка взаимности (грубая, но работает)
+    target_match = await find_match(target_id)
+    if target_match and target_match[0] == my_id:
         active_chats[my_id] = target_id
         active_chats[target_id] = my_id
-        await callback.message.edit_text("💕 Взаимный лайк! Чат открыт — пиши!")
-        await bot.send_message(target_id, "💕 Взаимный лайк! Чат открыт — пиши!")
+        await callback.message.edit_text("💕 Взаимный лайк! Чат открыт — пиши сообщение!")
+        await bot.send_message(target_id, "💕 Взаимный лайк! Чат открыт — пиши сообщение!")
     else:
         await callback.message.edit_text("❤️ Лайк отправлен. Ждём ответа...")
-        await search(callback.message)
+        # Можно добавить сохранение одностороннего лайка, если хочешь
 
 @dp.message(Command("stop"))
 async def stop_chat(message: types.Message):
@@ -270,15 +274,14 @@ async def feedback_like(callback: types.CallbackQuery):
     if mutual:
         await callback.message.edit_text("❤️ Вы оба понравились друг другу! Найди в /like")
     else:
-        await callback.message.edit_text("❤️ Спасибо! Если он тоже лайкнет — появится в /like")
+        await callback.message.edit_text("❤️ Спасибо за отзыв! Если он тоже лайкнет — появится в /like")
 
 @dp.callback_query(F.data.startswith("feedback_dislike_"))
 async def feedback_dislike(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[2])
     my_id = callback.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?), (?, ?)",
-                         (my_id, target_id, target_id, my_id))
+        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?), (?, ?)", (my_id, target_id, target_id, my_id))
         await db.commit()
     await callback.message.edit_text("👎 Этот человек больше не появится в поиске.")
 
@@ -434,7 +437,7 @@ async def activate_rebus_vip(message: types.Message):
         await db.execute("UPDATE users SET is_vip = 1, vip_until = ?, rebus_vip_used = 1 WHERE user_id = ?", (vip_until, message.from_user.id))
         await db.commit()
     
-    await message.answer("🎉 VIP по ребусу активирован на 14 дней!")
+    await message.answer("🎉 VIP по ребусу активирован на 14 дней!\nСпасибо, что решил ребус 🧠")
 
 @dp.message()
 async def forward_message(message: types.Message):
