@@ -121,6 +121,13 @@ async def find_match(user_id: int):
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
+    
+    # Автоматический VIP навсегда для админа (ты)
+    if message.from_user.id == ADMIN_ID:
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (ADMIN_ID,))
+            await db.commit()
+    
     help_text = (
         "👋 <b>Добро пожаловать в анонимные знакомства!</b>\n\n"
         "<b>Команды:</b>\n"
@@ -132,6 +139,7 @@ async def start(message: types.Message, state: FSMContext):
         "/help — руководство\n\n"
         "Удачных знакомств ❤️"
     )
+    
     if user:
         await message.answer(f"{help_text}\n\nТы зарегистрирован! Жми /search")
     else:
@@ -306,12 +314,20 @@ async def activate_rebus_vip(message: types.Message):
     if not user:
         await message.answer("Сначала зарегистрируйся: /start")
         return
+    
+    # Проверяем, был ли уже ребусный VIP (vip_until > 0 и is_vip = 1)
+    if user[6] == 1 and user[7] > 0:  # is_vip и vip_until установлен
+        await message.answer("❌ Ты уже активировал VIP по ребусу! Один раз на аккаунт.")
+        return
+    
     now = int(time.time())
     vip_until = now + 14 * 86400  # 14 дней
+    
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET is_vip = 1, vip_until = ? WHERE user_id = ?", (vip_until, message.from_user.id))
         await db.commit()
-    await message.answer("🎉 VIP по ребусу активирован на 14 дней!")
+    
+    await message.answer("🎉 VIP по ребусу активирован на 14 дней!\nСпасибо, что решил ребус 🧠")
 
 # Регистрация (gender, pref, age и т.д.) — без изменений, как в предыдущих версиях
 
