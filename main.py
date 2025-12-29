@@ -308,9 +308,13 @@ async def forward_message(message: types.Message):
                 await bot.forward_message(partner, message.from_user.id, message.message_id)
         else:
             await bot.forward_message(partner, message.from_user.id, message.message_id)
-    else:
-        await message.answer("Зарегистрируйся (/start) и найди собеседника (/search)")
+            else:
+            await bot.copy_message(partner, message.from_user.id, message.message_id)
+    
+    except Exception as e:
+        await bot.send_message(message.from_user.id, "Ошибка при отправке сообщения")
 
+    # <-- Здесь больше ничего нет! Убрали else с подсказкой
 async def main():
     await init_db()
     await dp.start_polling(bot)
