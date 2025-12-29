@@ -377,35 +377,33 @@ async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
 
 @dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
 async def send_invoice(callback: types.CallbackQuery):
-    if not CRYPTO_PROVIDER_TOKEN:
-        await callback.message.edit_text("⚠️ Оплата временно недоступна. Попробуй позже.")
-        return
-
     data = callback.data
     if data == "buy_vip":
-        title = "VIP навсегда"
-        description = "Видишь ник + буст + суперлайки"
+        title = "VIP навсегда (тест)"
+        description = "Тестовая покупка — получишь VIP бесплатно"
         payload = "vip_forever"
-        price = VIP_PRICE
+        price = 1  # 0.01 руб — минимальная цена для теста
     elif data == "buy_boost":
-        title = "Буст анкеты 24ч"
-        description = "Твоя анкета №1 в поиске"
+        title = "Буст анкеты 24ч (тест)"
+        description = "Тестовая покупка"
         payload = "boost_24h"
-        price = BOOST_PRICE
+        price = 1
     else:
-        title = "Суперлайк"
-        description = "Уведомление собеседнику"
+        title = "Суперлайк (тест)"
+        description = "Тестовая покупка"
         payload = "superlike"
-        price = SUPERLIKE_PRICE
+        price = 1
 
     await bot.send_invoice(
         chat_id=callback.from_user.id,
         title=title,
         description=description,
         payload=payload,
-        provider_token=CRYPTO_PROVIDER_TOKEN,
+        provider_token="401643678:TEST:12345",
         currency="RUB",
-        prices=[LabeledPrice(label=title, amount=price)]
+        prices=[LabeledPrice(label=title, amount=price)],
+        max_tip_amount=1000,
+        suggested_tip_amounts=[100, 200, 500]
     )
     await callback.answer()
 
