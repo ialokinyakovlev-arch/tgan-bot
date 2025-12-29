@@ -21,7 +21,7 @@ active_chats = {}
 # === НАСТРОЙКИ ===
 ADMIN_ID = 5761885649
 CHANNEL_LINK = "https://t.me/interandhelpfull"
-CRYPTO_PROVIDER_TOKEN = os.getenv("CRYPTO_PROVIDER_TOKEN")
+CRYPTO_PROVIDER_TOKEN = "401643678:TEST:12345"
 
 VIP_PRICE = 14900
 BOOST_PRICE = 4900
