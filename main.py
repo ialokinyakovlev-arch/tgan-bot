@@ -229,12 +229,62 @@ async def debug(message: types.Message):
 @dp.message()
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
-    if partner:
-        # Проверяем, VIP ли получатель
-        async with aiosqlite.connect(DB_NAME) as db:
-            async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
-                row = await cursor.fetchone()
-                receiver_vip = row[0] if row else 0
+    if not partner:
+        await message.answer("Зарегистрируйся (/start) и найди собеседника (/search)")
+        return
+    
+    # Проверяем, VIP ли ПОЛУЧАТЕЛЬ
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
+            row = await cursor.fetchone()
+            receiver_vip = row[0] if row else 0
+    
+    # Формируем имя отправителя (только для VIP-получателя)
+    sender_prefix = ""
+    if receiver_vip:
+        username = message.from_user.username
+        full_name = message.from_user.full_name
+        sender_name = f"@{username}" if username else full_name
+        sender_prefix = f"От: {sender_name}\n\n"
+    
+    # Копируем и отправляем сообщение заново (анонимно)
+    try:
+        if message.text:
+            await bot.send_message(partner, sender_prefix + message.text)
+        
+        elif message.photo:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_photo(partner, message.photo[-1].file_id, caption=caption)
+        
+        elif message.video:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_video(partner, message.video.file_id, caption=caption)
+        
+        elif message.voice:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_voice(partner, message.voice.file_id, caption=caption)
+        
+        elif message.audio:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_audio(partner, message.audio.file_id, caption=caption)
+        
+        elif message.document:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_document(partner, message.document.file_id, caption=caption)
+        
+        elif message.sticker:
+            await bot.send_sticker(partner, message.sticker.file_id)
+        
+        elif message.animation:
+            caption = sender_prefix + (message.caption or "")
+            await bot.send_animation(partner, message.animation.file_id, caption=caption)
+        
+        else:
+            # Для остальных типов — просто копируем
+            await bot.copy_message(partner, message.from_user.id, message.message_id)
+    
+    except Exception as e:
+        await bot.send_message(message.from_user.id, "Ошибка при отправке сообщения (возможно, слишком большой файл)")
         
         if receiver_vip:
             username = message.from_user.username
