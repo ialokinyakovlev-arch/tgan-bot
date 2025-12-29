@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from random import choice
 
-BOT_TOKEN = os.getenv("7799770441:AAH4NCtFlJOcK4li26kuYReGXVwciuVN3Pg")  # Токен берётся из переменных Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен берётся из переменных Railway
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
