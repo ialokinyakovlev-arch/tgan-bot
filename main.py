@@ -47,8 +47,7 @@ async def init_db():
                 is_vip INTEGER DEFAULT 0,
                 vip_until INTEGER DEFAULT 0,
                 boost_until INTEGER DEFAULT 0,
-                superlikes INTEGER DEFAULT 0,
-                rebus_vip_used INTEGER DEFAULT 0
+                superlikes INTEGER DEFAULT 0
             )
         """)
         await db.execute("""
@@ -65,6 +64,13 @@ async def init_db():
                 PRIMARY KEY (user1_id, user2_id)
             )
         """)
+        # Отдельная таблица для ребусного VIP — не удаляется при /reset
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rebus_used (
+                user_id INTEGER PRIMARY KEY,
+                used INTEGER DEFAULT 0
+            )
+        """)
         await db.commit()
 
 async def get_user(user_id: int):
@@ -74,14 +80,11 @@ async def get_user(user_id: int):
 
 async def add_user(user_id: int, gender: str, pref_gender: str, age: int, pref_min: int, pref_max: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT rebus_vip_used FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            old = await cursor.fetchone()
-            old_rebus = old[0] if old else 0
         await db.execute("""
             INSERT OR REPLACE INTO users
-            (user_id, gender, pref_gender, age, pref_age_min, pref_age_max, is_vip, vip_until, boost_until, superlikes, rebus_vip_used)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?)
-        """, (user_id, gender, pref_gender, age, pref_min, pref_max, old_rebus))
+            (user_id, gender, pref_gender, age, pref_age_min, pref_age_max, is_vip, vip_until, boost_until, superlikes)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0)
+        """, (user_id, gender, pref_gender, age, pref_min, pref_max))
         await db.commit()
 
 async def is_vip_active(user_id: int) -> bool:
@@ -113,7 +116,7 @@ async def find_match(user_id: int):
         candidates = []
         for row in rows:
             cand_id, cand_gender, cand_age = row
-            cand_pref = (await get_user(cand_id))[2]  # pref_gender кандидата
+            cand_pref = (await get_user(cand_id))[2]
             if (cand_pref == "all" or cand_pref == my_gender) and (pref_gender == "all" or pref_gender == cand_gender):
                 candidates.append((cand_id, cand_gender, cand_age))
 
@@ -154,6 +157,7 @@ async def start(message: types.Message, state: FSMContext):
                              ]))
         await state.set_state(Reg.gender)
 
+# Регистрация
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
     gender = "m" if callback.data == "gender_m" else "f"
@@ -235,7 +239,6 @@ async def like(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[1])
     my_id = callback.from_user.id
 
-    # Проверка взаимности (грубая, но работает)
     target_match = await find_match(target_id)
     if target_match and target_match[0] == my_id:
         active_chats[my_id] = target_id
@@ -244,7 +247,7 @@ async def like(callback: types.CallbackQuery):
         await bot.send_message(target_id, "💕 Взаимный лайк! Чат открыт — пиши сообщение!")
     else:
         await callback.message.edit_text("❤️ Лайк отправлен. Ждём ответа...")
-        # Можно добавить сохранение одностороннего лайка, если хочешь
+        await search(callback.message)
 
 @dp.message(Command("stop"))
 async def stop_chat(message: types.Message):
@@ -274,7 +277,7 @@ async def feedback_like(callback: types.CallbackQuery):
     if mutual:
         await callback.message.edit_text("❤️ Вы оба понравились друг другу! Найди в /like")
     else:
-        await callback.message.edit_text("❤️ Спасибо за отзыв! Если он тоже лайкнет — появится в /like")
+        await callback.message.edit_text("❤️ Спасибо! Если он тоже лайкнет — появится в /like")
 
 @dp.callback_query(F.data.startswith("feedback_dislike_"))
 async def feedback_dislike(callback: types.CallbackQuery):
@@ -419,22 +422,30 @@ async def successful_payment(message: types.Message):
             await db.commit()
         await message.answer("💌 Суперлайк куплен!")
 
+# Ребусный VIP — СТРОГО ОДИН РАЗ (даже после /reset)
 @dp.message(Command("9889"))
 async def activate_rebus_vip(message: types.Message):
-    user = await get_user(message.from_user.id)
-    if not user:
-        await message.answer("Сначала зарегистрируйся: /start")
-        return
-    
-    if user[10] == 1:
-        await message.answer("❌ Ты уже активировал VIP по ребусу! Один раз на аккаунт.")
-        return
-    
-    now = int(time.time())
-    vip_until = now + 14 * 86400
+    user_id = message.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE users SET is_vip = 1, vip_until = ?, rebus_vip_used = 1 WHERE user_id = ?", (vip_until, message.from_user.id))
+        # Проверяем, использовал ли уже ребус
+        async with db.execute("SELECT used FROM rebus_used WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0] == 1:
+                await message.answer("❌ Ты уже активировал VIP по ребусу! Один раз на аккаунт — навсегда.")
+                return
+        
+        # Проверяем, зарегистрирован ли пользователь
+        async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            if not await cursor.fetchone():
+                await message.answer("Сначала зарегистрируйся: /start")
+                return
+        
+        now = int(time.time())
+        vip_until = now + 14 * 86400
+        
+        await db.execute("UPDATE users SET is_vip = 1, vip_until = ? WHERE user_id = ?", (vip_until, user_id))
+        await db.execute("INSERT OR REPLACE INTO rebus_used (user_id, used) VALUES (?, 1)", (user_id,))
         await db.commit()
     
     await message.answer("🎉 VIP по ребусу активирован на 14 дней!\nСпасибо, что решил ребус 🧠")
