@@ -37,6 +37,20 @@ async def init_db():
                 is_vip INTEGER DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS blocks (
+                blocker_id INTEGER,
+                blocked_id INTEGER,
+                PRIMARY KEY (blocker_id, blocked_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chat_likes (
+                user1_id INTEGER,
+                user2_id INTEGER,
+                PRIMARY KEY (user1_id, user2_id)
+            )
+        """)
         await db.commit()
 
 async def get_user(user_id: int):
@@ -60,9 +74,14 @@ async def find_match(user_id: int):
     
     async with aiosqlite.connect(DB_NAME) as db:
         rows = await db.execute_fetchall("""
-            SELECT user_id, gender, pref_gender FROM users 
-            WHERE user_id != ? AND age BETWEEN ? AND ?
-        """, (user_id, pref_min, pref_max))
+            SELECT u.user_id, u.gender, u.pref_gender FROM users u
+            LEFT JOIN blocks b1 ON b1.blocker_id = ? AND b1.blocked_id = u.user_id
+            LEFT JOIN blocks b2 ON b2.blocker_id = u.user_id AND b2.blocked_id = ?
+            WHERE u.user_id != ?
+            AND u.age BETWEEN ? AND ?
+            AND b1.blocked_id IS NULL
+            AND b2.blocked_id IS NULL
+        """, (user_id, user_id, user_id, pref_min, pref_max))
         
         candidates = []
         for row in rows:
@@ -83,8 +102,8 @@ async def start(message: types.Message, state: FSMContext):
         "/search — найти анкету\n"
         "/stop — завершить чат\n"
         "/reset — удалить профиль\n"
-        "/vip — как получить VIP\n"
-        "/debug — статистика (только для админа)\n"
+        "/like — люди, которым ты тоже понравился\n"
+        "/vip — получить VIP\n"
         "/help — это меню\n\n"
         "Удачных знакомств ❤️"
     )
@@ -99,17 +118,17 @@ async def start(message: types.Message, state: FSMContext):
                              ]))
         await state.set_state(Reg.gender)
 
-@dp.message(Command("help", "menu"))
+@dp.message(Command("help"))
 async def help_command(message: types.Message):
     help_text = (
         "📖 <b>Руководство</b>\n\n"
         "/search — искать анкеты\n"
-        "/stop — выйти из чата\n"
+        "/stop — выйти из чата (потом оставь отзыв)\n"
         "/reset — начать заново\n"
-        "/vip — получить VIP (видеть ник)\n"
-        "/debug — только админ\n"
+        "/like — взаимные симпатии после чата\n"
+        "/vip — VIP-доступ\n"
         "/help — это меню\n\n"
-        "После взаимного ❤️ — анонимный чат 💕"
+        "После взаимного лайка — сразу чат 💕"
     )
     await message.answer(help_text, parse_mode="HTML")
 
@@ -174,41 +193,123 @@ async def search(message: types.Message):
     await message.answer(f"Анкета:\n{gender_text}, {match_user[3]} лет\n\n❤️ или 👎?",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                              [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
-                             [InlineKeyboardButton(text="👎 Дислайк", callback_data="dislike")]
+                             [InlineKeyboardButton(text="👎 Дислайк", callback_data=f"dislike_{match_id}")]
                          ]))
 
-@dp.callback_query(F.data == "dislike")
+@dp.callback_query(F.data.startswith("dislike_"))
 async def dislike(callback: types.CallbackQuery):
-    await callback.message.edit_text("Ищем дальше...")
+    target_id = int(callback.data.split("_")[1])
+    my_id = callback.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", (my_id, target_id))
+        await db.commit()
+    await callback.message.edit_text("👎 Пропущено. Ищем дальше...")
     await search(callback.message)
 
 @dp.callback_query(F.data.startswith("like_"))
 async def like(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[1])
-    if await find_match(target_id) == callback.from_user.id:
-        active_chats[callback.from_user.id] = target_id
-        active_chats[target_id] = callback.from_user.id
-        await callback.message.edit_text("Взаимный лайк! 💕 Чат открыт.")
-        await bot.send_message(target_id, "Взаимный лайк! 💕 Чат открыт. Пиши.")
+    my_id = callback.from_user.id
+    
+    if await find_match(target_id) == my_id:
+        active_chats[my_id] = target_id
+        active_chats[target_id] = my_id
+        await callback.message.edit_text("💕 Взаимный лайк! Чат открыт — пиши!")
+        await bot.send_message(target_id, "💕 Взаимный лайк! Чат открыт — пиши сообщение!")
     else:
-        await callback.message.edit_text("Лайк отправлен ❤️ Ищем дальше...")
+        await callback.message.edit_text("❤️ Лайк отправлен. Ждём ответа...")
         await search(callback.message)
 
 @dp.message(Command("stop"))
 async def stop_chat(message: types.Message):
     partner = active_chats.get(message.from_user.id)
-    if partner:
-        del active_chats[message.from_user.id]
-        del active_chats[partner]
-        await message.answer("Чат завершён.")
-        await bot.send_message(partner, "Собеседник вышел.")
-    else:
+    if not partner:
         await message.answer("Ты не в чате.")
+        return
+    
+    my_id = message.from_user.id
+    del active_chats[my_id]
+    del active_chats[partner]
+    
+    await message.answer("Чат завершён.\n\nКак тебе собеседник?",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                             [InlineKeyboardButton(text="❤️ Понравился", callback_data=f"feedback_like_{partner}")],
+                             [InlineKeyboardButton(text="👎 Не очень", callback_data=f"feedback_dislike_{partner}")]
+                         ]))
+    await bot.send_message(partner, "Собеседник завершил чат. Он оставит отзыв о тебе.")
+
+@dp.callback_query(F.data.startswith("feedback_like_"))
+async def feedback_like(callback: types.CallbackQuery):
+    target_id = int(callback.data.split("_")[2])
+    my_id = callback.from_user.id
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR IGNORE INTO chat_likes (user1_id, user2_id) VALUES (?, ?)", (my_id, target_id))
+        await db.commit()
+        
+        async with db.execute("SELECT 1 FROM chat_likes WHERE user1_id = ? AND user2_id = ?", (target_id, my_id)) as cursor:
+            mutual = await cursor.fetchone()
+    
+    if mutual:
+        await callback.message.edit_text("❤️ Вы оба понравились друг другу! Найдите его в /like")
+    else:
+        await callback.message.edit_text("❤️ Спасибо за отзыв! Если он тоже лайкнет — появится в /like")
+
+@dp.callback_query(F.data.startswith("feedback_dislike_"))
+async def feedback_dislike(callback: types.CallbackQuery):
+    target_id = int(callback.data.split("_")[2])
+    my_id = callback.from_user.id
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?), (?, ?)", 
+                         (my_id, target_id, target_id, my_id))
+        await db.commit()
+    
+    await callback.message.edit_text("👎 Этот человек больше не появится в поиске.")
+
+@dp.message(Command("like"))
+async def show_matches(message: types.Message):
+    my_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("""
+            SELECT u.user_id, u.gender, u.age FROM chat_likes cl
+            JOIN users u ON u.user_id = cl.user2_id
+            WHERE cl.user1_id = ?
+            AND EXISTS (SELECT 1 FROM chat_likes WHERE user1_id = cl.user2_id AND user2_id = cl.user1_id)
+        """, (my_id,)) as cursor:
+            matches = await cursor.fetchall()
+    
+    if not matches:
+        await message.answer("Пока нет взаимных симпатий после чата 😔\nОбщайся активнее!")
+        return
+    
+    text = "💕 <b>Взаимные симпатии:</b>\n\n"
+    keyboard = []
+    for m_id, gender, age in matches:
+        g_text = "Парень" if gender == "m" else "Девушка"
+        text += f"• {g_text}, {age} лет\n"
+        keyboard.append([InlineKeyboardButton(text=f"Написать снова", callback_data=f"rematch_{m_id}")])
+    
+    await message.answer(text + "\nНажми кнопку, чтобы возобновить чат!", 
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("rematch_"))
+async def rematch(callback: types.CallbackQuery):
+    target_id = int(callback.data.split("_")[1])
+    my_id = callback.from_user.id
+    
+    active_chats[my_id] = target_id
+    active_chats[target_id] = my_id
+    
+    await callback.message.edit_text("💬 Чат возобновлён! Пиши.")
+    await bot.send_message(target_id, "💬 Твой прошлый собеседник хочет продолжить! Чат возобновлён.")
 
 @dp.message(Command("reset"))
 async def reset_profile(message: types.Message):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM users WHERE user_id = ?", (message.from_user.id,))
+        await db.execute("DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?", (message.from_user.id, message.from_user.id))
+        await db.execute("DELETE FROM chat_likes WHERE user1_id = ? OR user2_id = ?", (message.from_user.id, message.from_user.id))
         await db.commit()
     if message.from_user.id in active_chats:
         partner = active_chats.pop(message.from_user.id)
@@ -219,10 +320,10 @@ async def reset_profile(message: types.Message):
 @dp.message(Command("vip"))
 async def vip_info(message: types.Message):
     await message.answer(
-        "🔥 Хочешь видеть ник отправителя в чате?\n\n"
-        "Подпишись на канал — там ребус с секретным кодом для VIP!\n\n"
+        "🔥 Хочешь видеть ник отправителя?\n\n"
+        "Подпишись на канал — там ребус с кодом для VIP!\n\n"
         "👉 <a href='https://t.me/interandhelpfull'>Канал с ребусом</a>\n\n"
-        "Решишь — пиши код боту в формате /код",
+        "Код вводи как /9889",
         parse_mode="HTML",
         disable_web_page_preview=True
     )
@@ -239,36 +340,27 @@ async def activate_vip(message: types.Message):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (message.from_user.id,))
         await db.commit()
-    await message.answer("🎉 VIP активирован навсегда!\nТеперь видишь, от кого сообщение.")
+    await message.answer("🎉 VIP навсегда активирован!")
 
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
-    # === ТОЛЬКО ТЫ МОЖЕШЬ ИСПОЛЬЗОВАТЬ ===
-    ADMIN_ID = 5761885649  # ← ЗАМЕНИ НА СВОЙ РЕАЛЬНЫЙ ID!
+    ADMIN_ID = 5761885649  # ← ТВОЙ ID!
     if message.from_user.id != ADMIN_ID:
-        await message.answer("❌ Только для админа.")
+        await message.answer("Только для админа.")
         return
     
-    user = await get_user(message.from_user.id)
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
             total = (await cursor.fetchone())[0]
-        async with db.execute("SELECT user_id FROM users") as cursor:
-            all_ids = [row[0] for row in await cursor.fetchall()]
-    text = f"🔧 Debug\nАнкет: {total}\nID: {all_ids}"
-    if user:
-        text += f"\nТвой профиль: OK"
-    await message.answer(text)
+    await message.answer(f"Анкет: {total}\nАдмин-команда работает.")
 
-# ПЕРЕСЫЛКА С ПРЕФИКСОМ "Создатель"
 @dp.message()
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
     if not partner:
         return
     
-    # === ТВОЙ ID (админ) ===
-    ADMIN_ID = 5761885649  # ← ЗАМЕНИ НА СВОЙ РЕАЛЬНЫЙ ID!
+    ADMIN_ID = 5761885649  # ← ТВОЙ ID!
     
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
@@ -293,18 +385,12 @@ async def forward_message(message: types.Message):
             await bot.send_video(partner, message.video.file_id, caption=sender_prefix + (message.caption or ""))
         elif message.voice:
             await bot.send_voice(partner, message.voice.file_id, caption=sender_prefix)
-        elif message.audio:
-            await bot.send_audio(partner, message.audio.file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.document:
-            await bot.send_document(partner, message.document.file_id, caption=sender_prefix + (message.caption or ""))
         elif message.sticker:
             await bot.send_sticker(partner, message.sticker.file_id)
-        elif message.animation:
-            await bot.send_animation(partner, message.animation.file_id, caption=sender_prefix + (message.caption or ""))
         else:
             await bot.copy_message(partner, message.from_user.id, message.message_id)
-    except Exception:
-        await bot.send_message(message.from_user.id, "Ошибка отправки (файл большой?)")
+    except:
+        pass  # Игнорируем ошибки отправки
 
 async def main():
     await init_db()
