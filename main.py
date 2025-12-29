@@ -84,7 +84,6 @@ async def start(message: types.Message, state: FSMContext):
         "/stop — завершить текущий чат\n"
         "/reset — удалить свой профиль и начать заново\n"
         "/vip — информация, как получить VIP (видеть, от кого сообщение)\n"
-        "/debug — показать свой профиль и статистику базы (для теста)\n"
         "/help — показать это руководство снова\n\n"
         "🔥 Анонимность гарантирована: собеседник не видит твой ник и профиль, пока не будет взаимного лайка."
     )
@@ -239,22 +238,46 @@ async def activate_vip(message: types.Message):
 
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
+    # Замени 123456789 на СВОЙ реальный user_id в Telegram
+    MY_USER_ID = 123456789  
+    
+    if message.from_user.id != MY_USER_ID:
+        await message.answer("❌ Эта команда доступна только администратору бота.")
+        return
+    
     user = await get_user(message.from_user.id)
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
             total = (await cursor.fetchone())[0]
         async with db.execute("SELECT user_id FROM users") as cursor:
             all_ids = [row[0] for row in await cursor.fetchall()]
+    
     if user:
         _, g, pg, a, mina, maxa, vip = user
         gender_text = "Парень" if g == "m" else "Девушка"
         pref_text = "парней" if pg == "m" else "девушек" if pg == "f" else "всех"
         vip_text = "VIP" if vip else "обычный"
-        text = f"Твой профиль: {gender_text}, {a} лет, ищешь {pref_text} ({mina}–{maxa}), {vip_text}\n\nВсего анкет: {total}\nID: {all_ids}"
+        text = f"🔧 <b>Debug (админ)</b>\n\nТвой профиль: {gender_text}, {a} лет, ищешь {pref_text} ({mina}–{maxa}), {vip_text}\n\nВсего анкет в базе: {total}\nID пользователей: {all_ids}"
     else:
-        text = f"Не зарегистрирован. Всего анкет: {total}"
-    await message.answer(text)
+        text = f"🔧 <b>Debug (админ)</b>\n\nТы не зарегистрирован.\nВсего анкет: {total}"
 
+    @dp.message(Command("help", "menu"))
+async def help_command(message: types.Message):
+    help_text = (
+        "📖 <b>Руководство по боту</b>\n\n"
+        "<b>Основные команды:</b>\n\n"
+        "/search — искать анкету и лайкать\n"
+        "/stop — выйти из текущего чата\n"
+        "/reset — полностью удалить профиль и начать сначала\n"
+        "/vip — как получить VIP (видеть ник отправителя в чате)\n"
+        "/help — показать это меню снова\n\n"
+        "После взаимного лайка открывается анонимный чат 💕\n"
+        "Пиши сообщения — они пересылаются собеседнику.\n\n"
+        "Удачных знакомств! ❤️"
+    )
+    await message.answer(help_text, parse_mode="HTML")
+    
+    await message.answer(text, parse_mode="HTML")
 @dp.message(Command("help", "menu"))
 async def help_command(message: types.Message):
     help_text = (
