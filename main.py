@@ -62,21 +62,32 @@ async def find_match(user_id: int):
     user = await get_user(user_id)
     if not user:
         return None
-    _, gender, pref_gender, age, pref_min, pref_max = user
+    _, my_gender, pref_gender, my_age, pref_min, pref_max = user  # мой пол и кого я ищу
     
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("""
-            SELECT user_id FROM users 
+        query = """
+            SELECT user_id, gender, pref_gender FROM users 
             WHERE user_id != ? 
-            AND gender = ? 
             AND age BETWEEN ? AND ?
-            AND pref_gender = ?
-        """, (user_id, pref_gender, pref_min, pref_max, gender)) as cursor:
-            rows = await cursor.fetchall()
-            if rows:
-                return choice(rows)[0]
+        """
+        params = [user_id, pref_min, pref_max]
+        
+        rows = await db.execute_fetchall(query, params)
+        
+        candidates = []
+        for row in rows:
+            cand_id, cand_gender, cand_pref = row
+            
+            # Проверяем, подхожу ли я кандидату
+            if cand_pref == "all" or cand_pref == my_gender:
+                # Проверяем, подходит ли кандидат мне
+                if pref_gender == "all" or pref_gender == cand_gender:
+                    candidates.append(cand_id)
+        
+        if candidates:
+            return choice(candidates)
+    
     return None
-
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
