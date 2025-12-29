@@ -239,7 +239,7 @@ async def activate_vip(message: types.Message):
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
     # Замени 123456789 на СВОЙ реальный user_id в Telegram
-    MY_USER_ID = @M626mq
+    MY_USER_ID = 5761885649
     
     if message.from_user.id != MY_USER_ID:
         await message.answer("❌ Эта команда доступна только администратору бота.")
@@ -294,12 +294,55 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text, parse_mode="HTML")
 
-# АНОНИМНАЯ ПЕРЕСЫЛКА (копируем, а не форвардим)
+# АНОНИМНАЯ ПЕРЕСЫЛКА С ПРЕФИКСОМ "Создатель" ДЛЯ АДМИНА
 @dp.message()
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
     if not partner:
         return  # Ничего не отвечаем, если не в чате
+    
+    # === ТВОЙ USER_ID (замени на свой реальный!) ===
+    ADMIN_ID = 5761885649  # <-- ВСТАВЬ СВОЙ ID ЗДЕСЬ!
+    
+    # VIP ли получатель?
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
+            row = await cursor.fetchone()
+            receiver_vip = row[0] if row else 0
+    
+    sender_prefix = ""
+    
+    # Специальный префикс для создателя (виден ВСЕМ)
+    if message.from_user.id == ADMIN_ID:
+        sender_prefix = "От: 👑 Создатель\n\n"
+    # Обычная логика для остальных
+    elif receiver_vip:
+        username = message.from_user.username
+        full_name = message.from_user.full_name
+        sender_name = f"@{username}" if username else full_name
+        sender_prefix = f"От: {sender_name}\n\n"
+    
+    try:
+        if message.text:
+            await bot.send_message(partner, sender_prefix + message.text)
+        elif message.photo:
+            await bot.send_photo(partner, message.photo[-1].file_id, caption=sender_prefix + (message.caption or ""))
+        elif message.video:
+            await bot.send_video(partner, message.video.file_id, caption=sender_prefix + (message.caption or ""))
+        elif message.voice:
+            await bot.send_voice(partner, message.voice.file_id, caption=sender_prefix)
+        elif message.audio:
+            await bot.send_audio(partner, message.audio.file_id, caption=sender_prefix + (message.caption or ""))
+        elif message.document:
+            await bot.send_document(partner, message.document.file_id, caption=sender_prefix + (message.caption or ""))
+        elif message.sticker:
+            await bot.send_sticker(partner, message.sticker.file_id)
+        elif message.animation:
+            await bot.send_animation(partner, message.animation.file_id, caption=sender_prefix + (message.caption or ""))
+        else:
+            await bot.copy_message(partner, message.from_user.id, message.message_id)
+    except Exception:
+        await bot.send_message(message.from_user.id, "Не удалось отправить сообщение (возможно, файл слишком большой)")
     
     # VIP ли получатель?
     async with aiosqlite.connect(DB_NAME) as db:
