@@ -40,11 +40,12 @@ async def init_db():
                 pref_gender TEXT,
                 age INTEGER,
                 pref_age_min INTEGER,
-                pref_age_max INTEGER
+                pref_age_max INTEGER,
+                is_vip INTEGER DEFAULT 0
             )
         """)
         await db.commit()
-
+        
 async def get_user(user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
@@ -100,6 +101,13 @@ async def start(message: types.Message, state: FSMContext):
                                  [InlineKeyboardButton(text="Женский", callback_data="gender_f")]
                              ]))
         await state.set_state(Reg.gender)
+
+@dp.message(Command("vip"))
+async def make_vip(message: types.Message):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (message.from_user.id,))
+        await db.commit()
+    await message.answer("🔥 Ты получил VIP! Теперь в чате ты видишь, от кого сообщение.")
 
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
@@ -201,10 +209,37 @@ async def stop_chat(message: types.Message):
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
     if partner:
-        await bot.forward_message(partner, message.from_user.id, message.message_id)
+        # Проверяем, VIP ли получатель (partner)
+        async with aiosqlite.connect(DB_NAME) as db:
+            async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
+                row = await cursor.fetchone()
+                is_vip = row[0] if row else 0
+        
+        if is_vip:
+            # Если VIP — отправляем с подписью "От: Имя"
+            username = message.from_user.username
+            full_name = message.from_user.full_name
+            sender_name = f"@{username}" if username else full_name
+            
+            await bot.send_message(partner, f"От: {sender_name}\n\n{message.text}" if message.text else "", 
+                                   entities=message.entities)
+            if message.photo:
+                await bot.send_photo(partner, message.photo[-1].file_id, caption=f"От: {sender_name}\n\n{message.caption}" if message.caption else f"От: {sender_name}")
+            elif message.video:
+                await bot.send_video(partner, message.video.file_id, caption=f"От: {sender_name}\n\n{message.caption}" if message.caption else f"От: {sender_name}")
+            elif message.document:
+                await bot.send_document(partner, message.document.file_id, caption=f"От: {sender_name}\n\n{message.caption}" if message.caption else f"От: {sender_name}")
+            elif message.sticker:
+                await bot.send_sticker(partner, message.sticker.file_id)
+            elif message.voice:
+                await bot.send_voice(partner, message.voice.file_id, caption=f"От: {sender_name}")
+            else:
+                await bot.forward_message(partner, message.from_user.id, message.message_id)
+        else:
+            # Обычный пользователь — полная анонимность
+            await bot.forward_message(partner, message.from_user.id, message.message_id)
     else:
         await message.answer("Используй /search для поиска или /start для регистрации.")
-
 async def main():
     await init_db()
     await dp.start_polling(bot)
