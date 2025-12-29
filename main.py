@@ -239,7 +239,7 @@ async def activate_vip(message: types.Message):
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
     # Замени 123456789 на СВОЙ реальный user_id в Telegram
-    MY_USER_ID = 123456789  
+    MY_USER_ID = @M626mq
     
     if message.from_user.id != MY_USER_ID:
         await message.answer("❌ Эта команда доступна только администратору бота.")
