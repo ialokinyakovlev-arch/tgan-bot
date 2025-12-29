@@ -141,6 +141,56 @@ async def start(message: types.Message, state: FSMContext):
                                  [InlineKeyboardButton(text="Женский", callback_data="gender_f")]
                              ]))
         await state.set_state(Reg.gender)
+        
+@dp.callback_query(F.data.startswith("gender_"))
+async def process_gender(callback: types.CallbackQuery, state: FSMContext):
+    gender = "m" if callback.data == "gender_m" else "f"
+    await state.update_data(gender=gender)
+    await callback.message.edit_text("Кого ищешь?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Парней", callback_data="pref_m")],
+        [InlineKeyboardButton(text="Девушек", callback_data="pref_f")],
+        [InlineKeyboardButton(text="Всех", callback_data="pref_all")]
+    ]))
+    await state.set_state(Reg.pref_gender)
+
+@dp.callback_query(F.data.startswith("pref_"))
+async def process_pref_gender(callback: types.CallbackQuery, state: FSMContext):
+    pref = callback.data.split("_")[1]
+    await state.update_data(pref_gender=pref)
+    await callback.message.edit_text("Сколько тебе лет? (напиши число)")
+    await state.set_state(Reg.age)
+
+@dp.message(Reg.age)
+async def process_age(message: types.Message, state: FSMContext):
+    if not message.text.isdigit() or not 16 <= int(message.text) <= 100:
+        await message.answer("Введите реальный возраст (16–100)")
+        return
+    await state.update_data(age=int(message.text))
+    await message.answer("Минимальный возраст собеседника?")
+    await state.set_state(Reg.pref_age_min)
+
+@dp.message(Reg.pref_age_min)
+async def process_min_age(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Напиши число!")
+        return
+    await state.update_data(pref_age_min=int(message.text))
+    await message.answer("Максимальный возраст собеседника?")
+    await state.set_state(Reg.pref_age_max)
+
+@dp.message(Reg.pref_age_max)
+async def process_max_age(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Напиши число!")
+        return
+    data = await state.get_data()
+    max_age = int(message.text)
+    if data["pref_age_min"] > max_age:
+        await message.answer("Минимальный возраст не может быть больше максимального!")
+        return
+    await add_user(message.from_user.id, data["gender"], data["pref_gender"], data["age"], data["pref_age_min"], max_age)
+    await message.answer("Регистрация завершена! 🔥\nТеперь используй /search для поиска анкеты.")
+    await state.clear()
 
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
