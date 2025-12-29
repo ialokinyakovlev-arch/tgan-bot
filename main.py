@@ -19,8 +19,8 @@ DB_NAME = "dating.db"
 active_chats = {}
 
 # === НАСТРОЙКИ ===
-ADMIN_ID = 5761885649  # Твой ID
-CHANNEL_LINK = "https://t.me/interandhelpfull"  # Твой канал
+ADMIN_ID = 5761885649
+CHANNEL_LINK = "https://t.me/interandhelpfull"
 CRYPTO_PROVIDER_TOKEN = os.getenv("CRYPTO_PROVIDER_TOKEN")
 
 VIP_PRICE = 14900
@@ -64,7 +64,6 @@ async def init_db():
                 PRIMARY KEY (user1_id, user2_id)
             )
         """)
-        # Отдельная таблица для ребусного VIP — не удаляется при /reset
         await db.execute("""
             CREATE TABLE IF NOT EXISTS rebus_used (
                 user_id INTEGER PRIMARY KEY,
@@ -129,7 +128,6 @@ async def find_match(user_id: int):
 async def start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     
-    # Автоматический VIP навсегда для админа
     if message.from_user.id == ADMIN_ID:
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (ADMIN_ID,))
@@ -157,7 +155,21 @@ async def start(message: types.Message, state: FSMContext):
                              ]))
         await state.set_state(Reg.gender)
 
-# Регистрация
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    await message.answer(
+        "📖 <b>Руководство</b>\n\n"
+        "/search — искать анкеты\n"
+        "/stop — завершить чат (потом отзыв)\n"
+        "/reset — начать заново\n"
+        "/like — взаимные симпатии после чата\n"
+        "/premium — купить VIP/буст/суперлайк\n"
+        "/help — это меню\n\n"
+        "После взаимного лайка — сразу чат 💕",
+        parse_mode="HTML"
+    )
+
+# Регистрация — все обработчики
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
     gender = "m" if callback.data == "gender_m" else "f"
@@ -366,7 +378,7 @@ async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
 @dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
 async def send_invoice(callback: types.CallbackQuery):
     if not CRYPTO_PROVIDER_TOKEN:
-        await callback.message.edit_text("⚠️ Оплата временно недоступна.")
+        await callback.message.edit_text("⚠️ Оплата временно недоступна. Попробуй позже.")
         return
 
     data = callback.data
@@ -422,20 +434,17 @@ async def successful_payment(message: types.Message):
             await db.commit()
         await message.answer("💌 Суперлайк куплен!")
 
-# Ребусный VIP — СТРОГО ОДИН РАЗ (даже после /reset)
 @dp.message(Command("9889"))
 async def activate_rebus_vip(message: types.Message):
     user_id = message.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
-        # Проверяем, использовал ли уже ребус
         async with db.execute("SELECT used FROM rebus_used WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if row and row[0] == 1:
                 await message.answer("❌ Ты уже активировал VIP по ребусу! Один раз на аккаунт — навсегда.")
                 return
         
-        # Проверяем, зарегистрирован ли пользователь
         async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
             if not await cursor.fetchone():
                 await message.answer("Сначала зарегистрируйся: /start")
