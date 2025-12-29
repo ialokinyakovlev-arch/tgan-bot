@@ -9,24 +9,20 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from random import choice
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен берётся из переменных Railway
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 DB_NAME = "dating.db"
+active_chats = {}  # {user_id: partner_id}
 
-# Состояния регистрации
 class Reg(StatesGroup):
     gender = State()
     pref_gender = State()
     age = State()
     pref_age_min = State()
     pref_age_max = State()
-
-# Пары в анонимном чате
-active_chats = {}
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
@@ -56,7 +52,6 @@ async def add_user(user_id: int, gender: str, pref_gender: str, age: int, pref_m
         """, (user_id, gender, pref_gender, age, pref_min, pref_max))
         await db.commit()
 
-# ИСПРАВЛЕННЫЙ ПОИСК — работает с "all" и взаимностью
 async def find_match(user_id: int):
     user = await get_user(user_id)
     if not user:
@@ -72,11 +67,8 @@ async def find_match(user_id: int):
         candidates = []
         for row in rows:
             cand_id, cand_gender, cand_pref = row
-            # Подхожу ли я кандидату?
-            if cand_pref == "all" or cand_pref == my_gender:
-                # Подходит ли кандидат мне?
-                if pref_gender == "all" or pref_gender == cand_gender:
-                    candidates.append(cand_id)
+            if (cand_pref == "all" or cand_pref == my_gender) and (pref_gender == "all" or pref_gender == cand_gender):
+                candidates.append(cand_id)
         
         if candidates:
             return choice(candidates)
@@ -86,7 +78,7 @@ async def find_match(user_id: int):
 async def start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     if user:
-        await message.answer("Привет! Ты уже зарегистрирован.\nКоманды: /search — найти анкету, /reset — удалить профиль, /debug — информация")
+        await message.answer("Привет! Ты уже зарегистрирован.\nКоманды:\n/search — найти анкету\n/stop — выйти из чата\n/reset — удалить профиль\n/vip — тест VIP\n/debug — информация о профиле")
     else:
         await message.answer("Привет! Давай зарегистрируемся для анонимных знакомств.\nВыбери свой пол:", 
                              reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -142,18 +134,18 @@ async def process_max_age(message: types.Message, state: FSMContext):
         await message.answer("Минимальный возраст не может быть больше максимального!")
         return
     await add_user(message.from_user.id, data["gender"], data["pref_gender"], data["age"], data["pref_age_min"], max_age)
-    await message.answer("Регистрация завершена! 🔥\nИспользуй /search для поиска анкеты.")
+    await message.answer("Регистрация завершена! 🔥\nТеперь используй /search")
     await state.clear()
 
 @dp.message(Command("search"))
 async def search(message: types.Message):
     match_id = await find_match(message.from_user.id)
     if not match_id:
-        await message.answer("Пока никого нет по твоим критериям 😔 Попробуй позже или измени настройки через /reset")
+        await message.answer("Пока никого нет по твоим критериям 😔 Попробуй позже или измени настройки (/reset)")
         return
     match_user = await get_user(match_id)
     gender_text = "Парень" if match_user[1] == "m" else "Девушка"
-    await message.answer(f"Нашёл анкету!\n{gender_text}, {match_user[3]} лет\n\nЛайк или дислайк?",
+    await message.answer(f"Нашёл анкету!\n{gender_text}, {match_user[3]} лет\n\n❤️ или 👎?",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                              [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
                              [InlineKeyboardButton(text="👎 Дислайк", callback_data="dislike")]
@@ -167,11 +159,10 @@ async def dislike(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("like_"))
 async def like(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[1])
-    # Проверяем взаимность
     if await find_match(target_id) == callback.from_user.id:
         active_chats[callback.from_user.id] = target_id
         active_chats[target_id] = callback.from_user.id
-        await callback.message.edit_text("Взаимный лайк! 💕 Теперь вы в анонимном чате. Пиши сообщение.")
+        await callback.message.edit_text("Взаимный лайк! 💕 Теперь вы в анонимном чате.")
         await bot.send_message(target_id, "Взаимный лайк! 💕 Теперь вы в анонимном чате. Пиши сообщение.")
     else:
         await callback.message.edit_text("Лайк отправлен ❤️ Ищем дальше...")
@@ -193,19 +184,18 @@ async def reset_profile(message: types.Message):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM users WHERE user_id = ?", (message.from_user.id,))
         await db.commit()
-    partner = active_chats.get(message.from_user.id)
-    if partner:
-        del active_chats[message.from_user.id]
-        del active_chats[partner]
-        await bot.send_message(partner, "Собеседник удалил профиль и вышел из чата.")
-    await message.answer("Твой профиль удалён. Начни заново с /start")
+    if message.from_user.id in active_chats:
+        partner = active_chats.pop(message.from_user.id)
+        active_chats.pop(partner, None)
+        await bot.send_message(partner, "Собеседник удалил профиль и вышел.")
+    await message.answer("Профиль удалён. Начни заново: /start")
 
 @dp.message(Command("vip"))
 async def make_vip(message: types.Message):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (message.from_user.id,))
         await db.commit()
-    await message.answer("🔥 Ты получил VIP! Теперь в чате ты видишь, от кого сообщение.")
+    await message.answer("🔥 VIP активирован! Теперь ты видишь, от кого сообщение.")
 
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
@@ -214,32 +204,30 @@ async def debug(message: types.Message):
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
             total = (await cursor.fetchone())[0]
         async with db.execute("SELECT user_id FROM users") as cursor:
-            all_ids = [row[0] async for row in cursor]
+            all_ids = [row[0] for row in await cursor.fetchall()]
     if user:
-        _, g, pg, a, min_a, max_a, vip = user
+        _, g, pg, a, mina, maxa, vip = user
         gender_text = "Парень" if g == "m" else "Девушка"
         pref_text = "парней" if pg == "m" else "девушек" if pg == "f" else "всех"
         vip_text = "VIP" if vip else "обычный"
-        text = f"Твой профиль: {gender_text}, {a} лет, ищешь {pref_text} ({min_a}–{max_a}), {vip_text}\n\nВсего анкет: {total}\nID в базе: {all_ids}"
+        text = f"Твой профиль: {gender_text}, {a} лет, ищешь {pref_text} ({mina}–{maxa}), {vip_text}\n\nВсего анкет: {total}\nID: {all_ids}"
     else:
-        text = f"Ты не зарегистрирован.\nВсего анкет: {total}"
+        text = f"Не зарегистрирован. Всего анкет: {total}"
     await message.answer(text)
 
-# ПЕРЕСЫЛКА С VIP-ФУНКЦИЕЙ
+# АНОНИМНАЯ ПЕРЕСЫЛКА (копируем, а не форвардим)
 @dp.message()
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
     if not partner:
-        await message.answer("Зарегистрируйся (/start) и найди собеседника (/search)")
-        return
+        return  # Ничего не отвечаем, если не в чате
     
-    # Проверяем, VIP ли ПОЛУЧАТЕЛЬ
+    # VIP ли получатель?
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
             row = await cursor.fetchone()
             receiver_vip = row[0] if row else 0
     
-    # Формируем имя отправителя (только для VIP-получателя)
     sender_prefix = ""
     if receiver_vip:
         username = message.from_user.username
@@ -247,74 +235,28 @@ async def forward_message(message: types.Message):
         sender_name = f"@{username}" if username else full_name
         sender_prefix = f"От: {sender_name}\n\n"
     
-    # Копируем и отправляем сообщение заново (анонимно)
     try:
         if message.text:
             await bot.send_message(partner, sender_prefix + message.text)
-        
         elif message.photo:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_photo(partner, message.photo[-1].file_id, caption=caption)
-        
+            await bot.send_photo(partner, message.photo[-1].file_id, caption=sender_prefix + (message.caption or ""))
         elif message.video:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_video(partner, message.video.file_id, caption=caption)
-        
+            await bot.send_video(partner, message.video.file_id, caption=sender_prefix + (message.caption or ""))
         elif message.voice:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_voice(partner, message.voice.file_id, caption=caption)
-        
+            await bot.send_voice(partner, message.voice.file_id, caption=sender_prefix)
         elif message.audio:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_audio(partner, message.audio.file_id, caption=caption)
-        
+            await bot.send_audio(partner, message.audio.file_id, caption=sender_prefix + (message.caption or ""))
         elif message.document:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_document(partner, message.document.file_id, caption=caption)
-        
+            await bot.send_document(partner, message.document.file_id, caption=sender_prefix + (message.caption or ""))
         elif message.sticker:
             await bot.send_sticker(partner, message.sticker.file_id)
-        
         elif message.animation:
-            caption = sender_prefix + (message.caption or "")
-            await bot.send_animation(partner, message.animation.file_id, caption=caption)
-        
+            await bot.send_animation(partner, message.animation.file_id, caption=sender_prefix + (message.caption or ""))
         else:
-            # Для остальных типов — просто копируем
             await bot.copy_message(partner, message.from_user.id, message.message_id)
-    
-    except Exception as e:
-        await bot.send_message(message.from_user.id, "Ошибка при отправке сообщения (возможно, слишком большой файл)")
-        
-        if receiver_vip:
-            username = message.from_user.username
-            full_name = message.from_user.full_name
-            sender = f"@{username}" if username else full_name
-            caption = f"От: {sender}\n\n{message.caption}" if message.caption else f"От: {sender}"
+    except Exception:
+        await bot.send_message(message.from_user.id, "Не удалось отправить сообщение (возможно, файл слишком большой)")
 
-            if message.text:
-                await bot.send_message(partner, f"От: {sender}\n\n{message.text}")
-            elif message.photo:
-                await bot.send_photo(partner, message.photo[-1].file_id, caption=caption)
-            elif message.video:
-                await bot.send_video(partner, message.video.file_id, caption=caption)
-            elif message.document:
-                await bot.send_document(partner, message.document.file_id, caption=caption)
-            elif message.sticker:
-                await bot.send_sticker(partner, message.sticker.file_id)
-            elif message.voice:
-                await bot.send_voice(partner, message.voice.file_id, caption=f"От: {sender}")
-            else:
-                await bot.forward_message(partner, message.from_user.id, message.message_id)
-        else:
-            await bot.forward_message(partner, message.from_user.id, message.message_id)
-            else:
-            await bot.copy_message(partner, message.from_user.id, message.message_id)
-    
-    except Exception as e:
-        await bot.send_message(message.from_user.id, "Ошибка при отправке сообщения")
-
-    # <-- Здесь больше ничего нет! Убрали else с подсказкой
 async def main():
     await init_db()
     await dp.start_polling(bot)
