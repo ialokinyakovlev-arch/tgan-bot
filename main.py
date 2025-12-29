@@ -15,7 +15,7 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 DB_NAME = "dating.db"
-active_chats = {}  # {user_id: partner_id}
+active_chats = {}
 
 class Reg(StatesGroup):
     gender = State()
@@ -79,24 +79,39 @@ async def start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     help_text = (
         "👋 <b>Добро пожаловать в анонимные знакомства!</b>\n\n"
-        "<b>Доступные команды:</b>\n\n"
-        "/search — найти новую анкету\n"
-        "/stop — завершить текущий чат\n"
-        "/reset — удалить свой профиль и начать заново\n"
-        "/vip — информация, как получить VIP (видеть, от кого сообщение)\n"
-        "/help — показать это руководство снова\n\n"
-        "🔥 Анонимность гарантирована: собеседник не видит твой ник и профиль, пока не будет взаимного лайка."
+        "<b>Команды:</b>\n\n"
+        "/search — найти анкету\n"
+        "/stop — завершить чат\n"
+        "/reset — удалить профиль\n"
+        "/vip — как получить VIP\n"
+        "/debug — статистика (только для админа)\n"
+        "/help — это меню\n\n"
+        "Удачных знакомств ❤️"
     )
     
     if user:
-        await message.answer(f"{help_text}\n\nТы уже зарегистрирован! Используй /search, чтобы найти собеседника ❤️")
+        await message.answer(f"{help_text}\n\nТы зарегистрирован! Жми /search")
     else:
-        await message.answer(f"{help_text}\n\nДавай зарегистрируемся! Выбери свой пол:", 
+        await message.answer(f"{help_text}\n\nДавай зарегистрируемся! Выбери пол:", 
                              reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                                  [InlineKeyboardButton(text="Мужской", callback_data="gender_m")],
                                  [InlineKeyboardButton(text="Женский", callback_data="gender_f")]
                              ]))
         await state.set_state(Reg.gender)
+
+@dp.message(Command("help", "menu"))
+async def help_command(message: types.Message):
+    help_text = (
+        "📖 <b>Руководство</b>\n\n"
+        "/search — искать анкеты\n"
+        "/stop — выйти из чата\n"
+        "/reset — начать заново\n"
+        "/vip — получить VIP (видеть ник)\n"
+        "/debug — только админ\n"
+        "/help — это меню\n\n"
+        "После взаимного ❤️ — анонимный чат 💕"
+    )
+    await message.answer(help_text, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
@@ -113,13 +128,13 @@ async def process_gender(callback: types.CallbackQuery, state: FSMContext):
 async def process_pref_gender(callback: types.CallbackQuery, state: FSMContext):
     pref = callback.data.split("_")[1]
     await state.update_data(pref_gender=pref)
-    await callback.message.edit_text("Сколько тебе лет? (напиши число)")
+    await callback.message.edit_text("Сколько тебе лет?")
     await state.set_state(Reg.age)
 
 @dp.message(Reg.age)
 async def process_age(message: types.Message, state: FSMContext):
     if not message.text.isdigit() or not 16 <= int(message.text) <= 100:
-        await message.answer("Введите реальный возраст (16–100)")
+        await message.answer("Возраст 16–100")
         return
     await state.update_data(age=int(message.text))
     await message.answer("Минимальный возраст собеседника?")
@@ -142,21 +157,21 @@ async def process_max_age(message: types.Message, state: FSMContext):
     data = await state.get_data()
     max_age = int(message.text)
     if data["pref_age_min"] > max_age:
-        await message.answer("Минимальный возраст не может быть больше максимального!")
+        await message.answer("Мин > макс? Исправь")
         return
     await add_user(message.from_user.id, data["gender"], data["pref_gender"], data["age"], data["pref_age_min"], max_age)
-    await message.answer("Регистрация завершена! 🔥\nТеперь используй /search")
+    await message.answer("Готово! 🔥 Используй /search")
     await state.clear()
 
 @dp.message(Command("search"))
 async def search(message: types.Message):
     match_id = await find_match(message.from_user.id)
     if not match_id:
-        await message.answer("Пока никого нет по твоим критериям 😔 Попробуй позже или измени настройки (/reset)")
+        await message.answer("Пока никого нет 😔 Попробуй позже или /reset")
         return
     match_user = await get_user(match_id)
     gender_text = "Парень" if match_user[1] == "m" else "Девушка"
-    await message.answer(f"Нашёл анкету!\n{gender_text}, {match_user[3]} лет\n\n❤️ или 👎?",
+    await message.answer(f"Анкета:\n{gender_text}, {match_user[3]} лет\n\n❤️ или 👎?",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                              [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
                              [InlineKeyboardButton(text="👎 Дислайк", callback_data="dislike")]
@@ -164,7 +179,7 @@ async def search(message: types.Message):
 
 @dp.callback_query(F.data == "dislike")
 async def dislike(callback: types.CallbackQuery):
-    await callback.message.edit_text("Ок, ищем дальше...")
+    await callback.message.edit_text("Ищем дальше...")
     await search(callback.message)
 
 @dp.callback_query(F.data.startswith("like_"))
@@ -173,8 +188,8 @@ async def like(callback: types.CallbackQuery):
     if await find_match(target_id) == callback.from_user.id:
         active_chats[callback.from_user.id] = target_id
         active_chats[target_id] = callback.from_user.id
-        await callback.message.edit_text("Взаимный лайк! 💕 Теперь вы в анонимном чате.")
-        await bot.send_message(target_id, "Взаимный лайк! 💕 Теперь вы в анонимном чате. Пиши сообщение.")
+        await callback.message.edit_text("Взаимный лайк! 💕 Чат открыт.")
+        await bot.send_message(target_id, "Взаимный лайк! 💕 Чат открыт. Пиши.")
     else:
         await callback.message.edit_text("Лайк отправлен ❤️ Ищем дальше...")
         await search(callback.message)
@@ -186,7 +201,7 @@ async def stop_chat(message: types.Message):
         del active_chats[message.from_user.id]
         del active_chats[partner]
         await message.answer("Чат завершён.")
-        await bot.send_message(partner, "Собеседник завершил чат.")
+        await bot.send_message(partner, "Собеседник вышел.")
     else:
         await message.answer("Ты не в чате.")
 
@@ -198,17 +213,16 @@ async def reset_profile(message: types.Message):
     if message.from_user.id in active_chats:
         partner = active_chats.pop(message.from_user.id)
         active_chats.pop(partner, None)
-        await bot.send_message(partner, "Собеседник удалил профиль и вышел.")
-    await message.answer("Профиль удалён. Начни заново: /start")
+        await bot.send_message(partner, "Собеседник удалил профиль.")
+    await message.answer("Профиль удалён. /start — начать заново")
 
 @dp.message(Command("vip"))
 async def vip_info(message: types.Message):
     await message.answer(
-        "🔥 Хочешь видеть, от кого приходят сообщения в анонимном чате?\n\n"
-        "Это доступно только по VIP!\n"
-        "Подпишись на мой канал — там опубликован ребус. Реши его и получи секретный код для активации VIP 😉\n\n"
-        "👉 <a href='https://t.me/+YXtqxNKDONdkMzU6'>Перейти в канал с ребусом</a>\n\n"
-        "Удачи! 🧠",
+        "🔥 Хочешь видеть ник отправителя в чате?\n\n"
+        "Подпишись на канал — там ребус с секретным кодом для VIP!\n\n"
+        "👉 <a href='https://t.me/+ТВОЯ_ССЫЛКА_НА_КАНАЛ'>Канал с ребусом</a>\n\n"
+        "Решишь — пиши код боту в формате /код",
         parse_mode="HTML",
         disable_web_page_preview=True
     )
@@ -217,32 +231,22 @@ async def vip_info(message: types.Message):
 async def activate_vip(message: types.Message):
     user = await get_user(message.from_user.id)
     if not user:
-        await message.answer("❌ Сначала пройди регистрацию: /start")
+        await message.answer("Сначала зарегистрируйся: /start")
         return
-    
-    # Проверяем, не VIP ли уже
-    if user[6] == 1:  # is_vip
-        await message.answer("✅ У тебя уже есть VIP!")
+    if user[6] == 1:
+        await message.answer("У тебя уже VIP!")
         return
-    
-    # Выдаём VIP
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (message.from_user.id,))
         await db.commit()
-    
-    await message.answer(
-        "🎉 Поздравляю! Ты правильно решил ребус!\n\n"
-        "🔥 VIP активирован навсегда!\n"
-        "Теперь в анонимном чате ты видишь, от кого приходят сообщения (префикс «От: @ник» или «От: Имя»)."
-    )
+    await message.answer("🎉 VIP активирован навсегда!\nТеперь видишь, от кого сообщение.")
 
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
-    # Замени 123456789 на СВОЙ реальный user_id в Telegram
-    MY_USER_ID = 5761885649
-    
-    if message.from_user.id != MY_USER_ID:
-        await message.answer("❌ Эта команда доступна только администратору бота.")
+    # === ТОЛЬКО ТЫ МОЖЕШЬ ИСПОЛЬЗОВАТЬ ===
+    ADMIN_ID = 5761885649  # ← ЗАМЕНИ НА СВОЙ РЕАЛЬНЫЙ ID!
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Только для админа.")
         return
     
     user = await get_user(message.from_user.id)
@@ -251,71 +255,29 @@ async def debug(message: types.Message):
             total = (await cursor.fetchone())[0]
         async with db.execute("SELECT user_id FROM users") as cursor:
             all_ids = [row[0] for row in await cursor.fetchall()]
-    
+    text = f"🔧 Debug\nАнкет: {total}\nID: {all_ids}"
     if user:
-        _, g, pg, a, mina, maxa, vip = user
-        gender_text = "Парень" if g == "m" else "Девушка"
-        pref_text = "парней" if pg == "m" else "девушек" if pg == "f" else "всех"
-        vip_text = "VIP" if vip else "обычный"
-        text = f"🔧 <b>Debug (админ)</b>\n\nТвой профиль: {gender_text}, {a} лет, ищешь {pref_text} ({mina}–{maxa}), {vip_text}\n\nВсего анкет в базе: {total}\nID пользователей: {all_ids}"
-    else:
-        text = f"🔧 <b>Debug (админ)</b>\n\nТы не зарегистрирован.\nВсего анкет: {total}"
+        text += f"\nТвой профиль: OK"
+    await message.answer(text)
 
-    @dp.message(Command("help", "menu"))
-async def help_command(message: types.Message):
-    help_text = (
-        "📖 <b>Руководство по боту</b>\n\n"
-        "<b>Основные команды:</b>\n\n"
-        "/search — искать анкету и лайкать\n"
-        "/stop — выйти из текущего чата\n"
-        "/reset — полностью удалить профиль и начать сначала\n"
-        "/vip — как получить VIP (видеть ник отправителя в чате)\n"
-        "/help — показать это меню снова\n\n"
-        "После взаимного лайка открывается анонимный чат 💕\n"
-        "Пиши сообщения — они пересылаются собеседнику.\n\n"
-        "Удачных знакомств! ❤️"
-    )
-    await message.answer(help_text, parse_mode="HTML")
-    
-    await message.answer(text, parse_mode="HTML")
-@dp.message(Command("help", "menu"))
-async def help_command(message: types.Message):
-    help_text = (
-        "📖 <b>Руководство по боту</b>\n\n"
-        "<b>Основные команды:</b>\n\n"
-        "/search — искать анкету и лайкать\n"
-        "/stop — выйти из текущего чата\n"
-        "/reset — полностью удалить профиль и начать сначала\n"
-        "/vip — как получить VIP (видеть ник отправителя в чате)\n"
-        "/help — показать это меню снова\n\n"
-        "После взаимного лайка открывается анонимный чат 💕\n"
-        "Пиши сообщения — они пересылаются собеседнику.\n\n"
-        "Удачных знакомств! ❤️"
-    )
-    await message.answer(help_text, parse_mode="HTML")
-
-# АНОНИМНАЯ ПЕРЕСЫЛКА С ПРЕФИКСОМ "Создатель" ДЛЯ АДМИНА
+# ПЕРЕСЫЛКА С ПРЕФИКСОМ "Создатель"
 @dp.message()
 async def forward_message(message: types.Message):
     partner = active_chats.get(message.from_user.id)
     if not partner:
-        return  # Ничего не отвечаем, если не в чате
+        return
     
-    # === ТВОЙ USER_ID (замени на свой реальный!) ===
-    ADMIN_ID = 5761885649  # <-- ВСТАВЬ СВОЙ ID ЗДЕСЬ!
+    # === ТВОЙ ID (админ) ===
+    ADMIN_ID = 5761885649  # ← ЗАМЕНИ НА СВОЙ РЕАЛЬНЫЙ ID!
     
-    # VIP ли получатель?
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
             row = await cursor.fetchone()
             receiver_vip = row[0] if row else 0
     
     sender_prefix = ""
-    
-    # Специальный префикс для создателя (виден ВСЕМ)
     if message.from_user.id == ADMIN_ID:
         sender_prefix = "От: 👑 Создатель\n\n"
-    # Обычная логика для остальных
     elif receiver_vip:
         username = message.from_user.username
         full_name = message.from_user.full_name
@@ -342,42 +304,7 @@ async def forward_message(message: types.Message):
         else:
             await bot.copy_message(partner, message.from_user.id, message.message_id)
     except Exception:
-        await bot.send_message(message.from_user.id, "Не удалось отправить сообщение (возможно, файл слишком большой)")
-    
-    # VIP ли получатель?
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT is_vip FROM users WHERE user_id = ?", (partner,)) as cursor:
-            row = await cursor.fetchone()
-            receiver_vip = row[0] if row else 0
-    
-    sender_prefix = ""
-    if receiver_vip:
-        username = message.from_user.username
-        full_name = message.from_user.full_name
-        sender_name = f"@{username}" if username else full_name
-        sender_prefix = f"От: {sender_name}\n\n"
-    
-    try:
-        if message.text:
-            await bot.send_message(partner, sender_prefix + message.text)
-        elif message.photo:
-            await bot.send_photo(partner, message.photo[-1].file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.video:
-            await bot.send_video(partner, message.video.file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.voice:
-            await bot.send_voice(partner, message.voice.file_id, caption=sender_prefix)
-        elif message.audio:
-            await bot.send_audio(partner, message.audio.file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.document:
-            await bot.send_document(partner, message.document.file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.sticker:
-            await bot.send_sticker(partner, message.sticker.file_id)
-        elif message.animation:
-            await bot.send_animation(partner, message.animation.file_id, caption=sender_prefix + (message.caption or ""))
-        else:
-            await bot.copy_message(partner, message.from_user.id, message.message_id)
-    except Exception:
-        await bot.send_message(message.from_user.id, "Не удалось отправить сообщение (возможно, файл слишком большой)")
+        await bot.send_message(message.from_user.id, "Ошибка отправки (файл большой?)")
 
 async def main():
     await init_db()
