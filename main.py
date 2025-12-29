@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from random import choice
 
-BOT_TOKEN = "7799770441:AAG9OuFwqYWEbfyYJhMdBLDMvRVAa0_FsKM"  # Замени на свой токен
+BOT_TOKEN = "7799770441:AAH4NCtFlJOcK4li26kuYReGXVwciuVN3Pg"  # Замени на свой токен
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
