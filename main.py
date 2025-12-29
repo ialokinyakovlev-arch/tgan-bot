@@ -206,11 +206,30 @@ async def send_invoice(callback: types.CallbackQuery):
         prices=[LabeledPrice(label=title, amount=price)]
     )
 
-@dp.successful_payment()
+@dp.message(F.successful_payment)
 async def successful_payment(message: types.Message):
     payload = message.successful_payment.invoice_payload
     user_id = message.from_user.id
     now = int(time.time())
+
+    if payload == "vip_forever":
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
+        await message.answer("🎉 VIP навсегда активирован! Теперь видишь ник + буст + суперлайки!")
+
+    elif payload == "boost_24h":
+        boost_until = now + 86400
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET boost_until = ? WHERE user_id = ?", (boost_until, user_id))
+            await db.commit()
+        await message.answer("🚀 Буст активирован на 24 часа!")
+
+    elif payload == "superlike":
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET superlikes = superlikes + 1 WHERE user_id = ?", (user_id,))
+            await db.commit()
+        await message.answer("💌 Суперлайк куплен!")
 
     if payload == "vip_forever":
         async with aiosqlite.connect(DB_NAME) as db:
