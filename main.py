@@ -191,11 +191,39 @@ async def reset_profile(message: types.Message):
     await message.answer("Профиль удалён. Начни заново: /start")
 
 @dp.message(Command("vip"))
-async def make_vip(message: types.Message):
+async def vip_info(message: types.Message):
+    await message.answer(
+        "🔥 Хочешь видеть, от кого приходят сообщения в анонимном чате?\n\n"
+        "Это доступно только по VIP!\n"
+        "Подпишись на мой канал — там опубликован ребус. Реши его и получи секретный код для активации VIP 😉\n\n"
+        "👉 <a href='https://t.me/+YXtqxNKDONdkMzU6'>Перейти в канал с ребусом</a>\n\n"
+        "Удачи! 🧠",
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
+
+@dp.message(Command("9889"))
+async def activate_vip(message: types.Message):
+    user = await get_user(message.from_user.id)
+    if not user:
+        await message.answer("❌ Сначала пройди регистрацию: /start")
+        return
+    
+    # Проверяем, не VIP ли уже
+    if user[6] == 1:  # is_vip
+        await message.answer("✅ У тебя уже есть VIP!")
+        return
+    
+    # Выдаём VIP
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (message.from_user.id,))
         await db.commit()
-    await message.answer("🔥 VIP активирован! Теперь ты видишь, от кого сообщение.")
+    
+    await message.answer(
+        "🎉 Поздравляю! Ты правильно решил ребус!\n\n"
+        "🔥 VIP активирован навсегда!\n"
+        "Теперь в анонимном чате ты видишь, от кого приходят сообщения (префикс «От: @ник» или «От: Имя»)."
+    )
 
 @dp.message(Command("debug"))
 async def debug(message: types.Message):
