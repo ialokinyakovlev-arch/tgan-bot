@@ -382,7 +382,7 @@ async def send_test_invoice(callback: types.CallbackQuery):
         title = "VIP навсегда (тест)"
         description = "Тестовая покупка — получишь VIP бесплатно"
         payload = "vip_forever"
-        price = 1  # 0.01 руб для теста
+        price = 1  # 0.01 руб — минимальная цена
     elif data == "buy_boost":
         title = "Буст анкеты 24ч (тест)"
         description = "Тестовая покупка"
@@ -400,7 +400,7 @@ async def send_test_invoice(callback: types.CallbackQuery):
             title=title,
             description=description,
             payload=payload,
-            provider_token="401643678:TEST:12345",  # Тестовый токен Telegram
+            provider_token=CRYPTO_PROVIDER_TOKEN,
             currency="RUB",
             prices=[LabeledPrice(label=title, amount=price)],
             need_name=False,
