@@ -382,7 +382,7 @@ async def send_test_invoice(callback: types.CallbackQuery):
         title = "VIP навсегда (тест)"
         description = "Тестовая покупка — получишь VIP бесплатно"
         payload = "vip_forever"
-        price = 1  # 0.01 руб
+        price = 1  # 0.01 руб для теста
     elif data == "buy_boost":
         title = "Буст анкеты 24ч (тест)"
         description = "Тестовая покупка"
@@ -394,25 +394,34 @@ async def send_test_invoice(callback: types.CallbackQuery):
         payload = "superlike"
         price = 1
 
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title=title,
-        description=description,
-        payload=payload,
-        provider_token="401643678:TEST:12345",  # Тестовый токен Telegram — работает всегда
-        currency="RUB",
-        prices=[LabeledPrice(label=title, amount=price)]
-    )
-    await callback.answer()
+    try:
+        await bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token="401643678:TEST:12345",  # Тестовый токен Telegram
+            currency="RUB",
+            prices=[LabeledPrice(label=title, amount=price)],
+            need_name=False,
+            need_phone_number=False,
+            need_email=False,
+            need_shipping_address=False,
+            is_flexible=False
+        )
+        await callback.answer()
+    except Exception as e:
+        await callback.message.edit_text(f"Ошибка: {str(e)}\nПопробуй позже или реши ребус бесплатно.")
 
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
 
 @dp.message(F.successful_payment)
-async def test_successful_payment(message: types.Message):
+async def successful_payment(message: types.Message):
     payload = message.successful_payment.invoice_payload
     user_id = message.from_user.id
+    now = int(time.time())
 
     if payload == "vip_forever":
         async with aiosqlite.connect(DB_NAME) as db:
@@ -421,7 +430,7 @@ async def test_successful_payment(message: types.Message):
         await message.answer("🎉 Тестовый VIP навсегда активирован! Всё работает ❤️")
 
     elif payload == "boost_24h":
-        boost_until = int(time.time()) + 86400
+        boost_until = now + 86400
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET boost_until = ? WHERE user_id = ?", (boost_until, user_id))
             await db.commit()
