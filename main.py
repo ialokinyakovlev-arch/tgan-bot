@@ -140,7 +140,7 @@ async def start(message: types.Message, state: FSMContext):
         "/stop — завершить чат\n"
         "/reset — удалить профиль\n"
         "/like — взаимные симпатии\n"
-        "/premium — премиум-фичи\n"
+        "/premium — премиум-фичи (тест)\n"
         "/help — руководство\n\n"
         "Удачных знакомств ❤️"
     )
@@ -163,7 +163,7 @@ async def help_command(message: types.Message):
         "/stop — завершить чат (потом отзыв)\n"
         "/reset — начать заново\n"
         "/like — взаимные симпатии после чата\n"
-        "/premium — купить VIP/буст/суперлайк\n"
+        "/premium — купить VIP/буст/суперлайк (тест)\n"
         "/help — это меню\n\n"
         "После взаимного лайка — сразу чат 💕",
         parse_mode="HTML"
@@ -372,6 +372,44 @@ async def premium_menu(message: types.Message):
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
+
+@dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
+async def send_test_invoice(callback: types.CallbackQuery):
+    data = callback.data
+    if data == "buy_vip":
+        title = "VIP навсегда (тест)"
+        description = "Тестовая покупка — получишь VIP бесплатно"
+        payload = "vip_forever"
+        price = 1
+    elif data == "buy_boost":
+        title = "Буст анкеты 24ч (тест)"
+        description = "Тестовая покупка"
+        payload = "boost_24h"
+        price = 1
+    else:
+        title = "Суперлайк (тест)"
+        description = "Тестовая покупка"
+        payload = "superlike"
+        price = 1
+
+    try:
+        await bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token=CRYPTO_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=title, amount=price)],
+            need_name=False,
+            need_phone_number=False,
+            need_email=False,
+            need_shipping_address=False,
+            is_flexible=False
+        )
+        await callback.answer()
+    except Exception as e:
+        await callback.message.edit_text(f"Ошибка: {str(e)}\nПопробуй /reset и /start заново.")
 
 @dp.message(F.successful_payment)
 async def successful_payment(message: types.Message):
