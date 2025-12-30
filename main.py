@@ -21,7 +21,7 @@ active_chats = {}
 # === НАСТРОЙКИ ===
 ADMIN_ID = 5761885649
 CHANNEL_LINK = "https://t.me/interandhelpfull"
-CRYPTO_PROVIDER_TOKEN = "401643678:TEST:12345"
+CRYPTO_PROVIDER_TOKEN = "401643678:TEST:12345"  # ТЕСТОВЫЙ ТОКЕН TELEGRAM — ОТКРОЕТ ОКНО ОПЛАТЫ
 
 VIP_PRICE = 14900
 BOOST_PRICE = 4900
@@ -169,7 +169,6 @@ async def help_command(message: types.Message):
         parse_mode="HTML"
     )
 
-# Регистрация — все обработчики
 @dp.callback_query(F.data.startswith("gender_"))
 async def process_gender(callback: types.CallbackQuery, state: FSMContext):
     gender = "m" if callback.data == "gender_m" else "f"
@@ -250,7 +249,6 @@ async def dislike(callback: types.CallbackQuery):
 async def like(callback: types.CallbackQuery):
     target_id = int(callback.data.split("_")[1])
     my_id = callback.from_user.id
-
     target_match = await find_match(target_id)
     if target_match and target_match[0] == my_id:
         active_chats[my_id] = target_id
@@ -357,61 +355,19 @@ async def debug(message: types.Message):
 @dp.message(Command("premium"))
 async def premium_menu(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 VIP навсегда — 149₽", callback_data="buy_vip")],
-        [InlineKeyboardButton(text="🚀 Буст анкеты 24ч — 49₽", callback_data="buy_boost")],
-        [InlineKeyboardButton(text="💌 Суперлайк — 29₽", callback_data="buy_superlike")],
+        [InlineKeyboardButton(text="💎 VIP навсегда — 149₽ (тест)", callback_data="buy_vip")],
+        [InlineKeyboardButton(text="🚀 Буст анкеты 24ч — 49₽ (тест)", callback_data="buy_boost")],
+        [InlineKeyboardButton(text="💌 Суперлайк — 29₽ (тест)", callback_data="buy_superlike")],
         [InlineKeyboardButton(text="🆓 Ребус (VIP на 14 дней)", url=CHANNEL_LINK)]
     ])
     await message.answer(
         "💎 <b>Премиум-фичи</b>\n\n"
-        "• <b>VIP навсегда</b> — видишь ник + буст + суперлайки — 149₽\n"
-        "• <b>Буст</b> — анкета №1 в поиске 24ч — 49₽\n"
-        "• <b>Суперлайк</b> — уведомление собеседнику — 29₽\n\n"
-        "Или реши ребус бесплатно — VIP на 14 дней!",
+        "• <b>VIP навсегда</b> — видишь ник + буст + суперлайки\n"
+        "• <b>Буст</b> — анкета №1 в поиске 24ч\n"
+        "• <b>Суперлайк</b> — уведомление собеседнику\n\n"
+        "Тестовый режим — оплата бесплатная!",
         reply_markup=keyboard, parse_mode="HTML"
     )
-
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
-
-@dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
-async def send_test_invoice(callback: types.CallbackQuery):
-    data = callback.data
-    if data == "buy_vip":
-        title = "VIP навсегда (тест)"
-        description = "Тестовая покупка — получишь VIP бесплатно"
-        payload = "vip_forever"
-        price = 1  # 0.01 руб — минимальная цена для теста
-    elif data == "buy_boost":
-        title = "Буст анкеты 24ч (тест)"
-        description = "Тестовая покупка"
-        payload = "boost_24h"
-        price = 1
-    else:
-        title = "Суперлайк (тест)"
-        description = "Тестовая покупка"
-        payload = "superlike"
-        price = 1
-
-    try:
-        await bot.send_invoice(
-            chat_id=callback.from_user.id,
-            title=title,
-            description=description,
-            payload=payload,
-            provider_token="401643678:TEST:12345",
-            currency="RUB",
-            prices=[LabeledPrice(label=title, amount=price)],
-            need_name=False,
-            need_phone_number=False,
-            need_email=False,
-            need_shipping_address=False,
-            is_flexible=False
-        )
-        await callback.answer()
-    except Exception as e:
-        await callback.message.edit_text(f"Ошибка: {str(e)}\nПопробуй позже или реши ребус бесплатно.")
 
 @dp.pre_checkout_query()
 async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
