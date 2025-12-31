@@ -148,7 +148,7 @@ async def start(message: types.Message, state: FSMContext):
     if user:
         await message.answer(f"{help_text}\n\nТы зарегистрирован! Жми /search")
     else:
-        await message.answer(f"{help_text}\n\nДавай зарегистрируемся! Выбери пол:", 
+        await message.answer(f"{help_text}\n\nДавай зарегистрируемся! Выбери пол:",
                              reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                                  [InlineKeyboardButton(text="Мужской", callback_data="gender_m")],
                                  [InlineKeyboardButton(text="Женский", callback_data="gender_f")]
@@ -356,16 +356,17 @@ async def debug(message: types.Message):
 async def premium_menu(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 VIP навсегда — 149₽ (тест)", callback_data="buy_vip")],
-        [InlineKeyboardButton(text="🚀 Буст анкеты 24ч — 49₽ (тест)", callback_data="buy_boost")],
+        [InlineKeyboardButton(text="🚀 Буст 24ч — 49₽ (тест)", callback_data="buy_boost")],
         [InlineKeyboardButton(text="💌 Суперлайк — 29₽ (тест)", callback_data="buy_superlike")],
         [InlineKeyboardButton(text="🆓 Ребус (VIP на 14 дней)", url=CHANNEL_LINK)]
     ])
     await message.answer(
-        "💎 <b>Премиум-фичи</b>\n\n"
-        "• <b>VIP навсегда</b> — видишь ник + буст + суперлайки\n"
-        "• <b>Буст</b> — анкета №1 в поиске 24ч\n"
-        "• <b>Суперлайк</b> — уведомление собеседнику\n\n"
-        "Тестовый режим — оплата бесплатная!",
+        "💎 <b>Премиум-фичи</b> (тестовый режим)\n\n"
+        "Нажми кнопку — получишь фичу бесплатно для проверки!\n\n"
+        "• VIP навсегда — видишь ник + буст + суперлайки\n"
+        "• Буст — анкета №1 в поиске 24ч\n"
+        "• Суперлайк — уведомление собеседнику\n\n"
+        "Реальные платежи подключим позже.",
         reply_markup=keyboard, parse_mode="HTML"
     )
 
@@ -375,66 +376,28 @@ async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
 
 @dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
 async def send_test_invoice(callback: types.CallbackQuery):
+    await callback.answer()  # Убирает "часики" — обязательно!
+
     data = callback.data
-    if data == "buy_vip":
-        title = "VIP навсегда (тест)"
-        description = "Тестовая покупка — получишь VIP бесплатно"
-        payload = "vip_forever"
-        price = 1
-    elif data == "buy_boost":
-        title = "Буст анкеты 24ч (тест)"
-        description = "Тестовая покупка"
-        payload = "boost_24h"
-        price = 1
-    else:
-        title = "Суперлайк (тест)"
-        description = "Тестовая покупка"
-        payload = "superlike"
-        price = 1
-
-    try:
-        await bot.send_invoice(
-            chat_id=callback.from_user.id,
-            title=title,
-            description=description,
-            payload=payload,
-            provider_token=CRYPTO_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=[LabeledPrice(label=title, amount=price)],
-            need_name=False,
-            need_phone_number=False,
-            need_email=False,
-            need_shipping_address=False,
-            is_flexible=False
-        )
-        await callback.answer()
-    except Exception as e:
-        await callback.message.edit_text(f"Ошибка: {str(e)}\nПопробуй /reset и /start заново.")
-
-@dp.message(F.successful_payment)
-async def successful_payment(message: types.Message):
-    payload = message.successful_payment.invoice_payload
-    user_id = message.from_user.id
+    user_id = callback.from_user.id
     now = int(time.time())
 
-    if payload == "vip_forever":
+    if data == "buy_vip":
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (user_id,))
             await db.commit()
-        await message.answer("🎉 Тестовый VIP навсегда активирован! Всё работает ❤️")
-
-    elif payload == "boost_24h":
+        await callback.message.edit_text("🎉 VIP навсегда активирован (тест)! Всё работает ❤️")
+    elif data == "buy_boost":
         boost_until = now + 86400
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET boost_until = ? WHERE user_id = ?", (boost_until, user_id))
             await db.commit()
-        await message.answer("🚀 Тестовый буст активирован!")
-
-    elif payload == "superlike":
+        await callback.message.edit_text("🚀 Буст активирован на 24 часа (тест)!")
+    elif data == "buy_superlike":
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET superlikes = superlikes + 1 WHERE user_id = ?", (user_id,))
             await db.commit()
-        await message.answer("💌 Тестовый суперлайк куплен!")
+        await callback.message.edit_text("💌 Суперлайк куплен (тест)!")
 
 @dp.message(Command("9889"))
 async def activate_rebus_vip(message: types.Message):
