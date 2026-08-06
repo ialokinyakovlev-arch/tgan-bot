@@ -1,463 +1,199 @@
-import asyncio
-import aiosqlite
-import os
-import time
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
-from random import choice
+import discord
+from discord.ext import commands
+from discord.ui import Button, View, Modal, TextInput
+import traceback
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+# ================= НАСТРОЙКИ БОТА =================
+TOKEN = "MTUzNDkxMzE4MzEwODgyNTIyMQ.GxpWBv.iSwkTnIv1XhfNAPVpmcDgsXpQl37zztK5KzYs4"
+CHANNEL_APPLICATIONS_ID = 1534930734815514674  # ID канала рекрутеров без кавычек
+ROLE_ACCEPTED_IDS = [1509301959394594926]  # ID роли, которая выдается при ПРИНЯТИИ
+ROLE_RECRUIT_ID = 1534920590656536747  # ID роли рекрутеров для тега
+# ==================================================
 
-DB_NAME = "dating.db"
-active_chats = {}
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === НАСТРОЙКИ ===
-ADMIN_ID = 5761885649
-CHANNEL_LINK = "https://t.me/interandhelpfull"
-CRYPTO_PROVIDER_TOKEN = "401643678:TEST:12345"  # ТЕСТОВЫЙ ТОКЕН TELEGRAM — ОТКРОЕТ ОКНО ОПЛАТЫ
+# ВТОРАЯ ЧАСТЬ АНКЕТЫ (4 вопроса)
+class ApplicationModalPart2(Modal, title="Заявка в loveSquad (Часть 2/2)"):
+    cheat = TextInput(label="С каким читом вы играете?", placeholder="Название софта...", max_length=100)
+    mic = TextInput(label="Имеете ли вы хороший микрофон?", placeholder="Да / Нет / Пойдет", max_length=50)
+    hours = TextInput(label="Сколько часов можете проводить с нами?", placeholder="Например: 4-6 часов каждый день", max_length=100)
+    tz = TextInput(label="Какой у вас часовой пояс?", placeholder="Например: МСК, МСК+2", max_length=50)
 
-VIP_PRICE = 14900
-BOOST_PRICE = 4900
-SUPERLIKE_PRICE = 2900
+    def __init__(self, part1_data):
+        super().__init__()
+        self.part1_data = part1_data
 
-class Reg(StatesGroup):
-    gender = State()
-    pref_gender = State()
-    age = State()
-    pref_age_min = State()
-    pref_age_max = State()
-
-async def init_db():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                gender TEXT,
-                pref_gender TEXT,
-                age INTEGER,
-                pref_age_min INTEGER,
-                pref_age_max INTEGER,
-                is_vip INTEGER DEFAULT 0,
-                vip_until INTEGER DEFAULT 0,
-                boost_until INTEGER DEFAULT 0,
-                superlikes INTEGER DEFAULT 0
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS blocks (
-                blocker_id INTEGER,
-                blocked_id INTEGER,
-                PRIMARY KEY (blocker_id, blocked_id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS chat_likes (
-                user1_id INTEGER,
-                user2_id INTEGER,
-                PRIMARY KEY (user1_id, user2_id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS rebus_used (
-                user_id INTEGER PRIMARY KEY,
-                used INTEGER DEFAULT 0
-            )
-        """)
-        await db.commit()
-
-async def get_user(user_id: int):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            return await cursor.fetchone()
-
-async def add_user(user_id: int, gender: str, pref_gender: str, age: int, pref_min: int, pref_max: int):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO users
-            (user_id, gender, pref_gender, age, pref_age_min, pref_age_max, is_vip, vip_until, boost_until, superlikes)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0)
-        """, (user_id, gender, pref_gender, age, pref_min, pref_max))
-        await db.commit()
-
-async def is_vip_active(user_id: int) -> bool:
-    user = await get_user(user_id)
-    if not user:
-        return False
-    is_vip, vip_until = user[6], user[7]
-    return is_vip and (vip_until == 0 or vip_until > int(time.time()))
-
-async def find_match(user_id: int):
-    user = await get_user(user_id)
-    if not user:
-        return None
-    _, my_gender, pref_gender, _, pref_min, pref_max, _, _, boost_until, _ = user
-    now = int(time.time())
-
-    async with aiosqlite.connect(DB_NAME) as db:
-        rows = await db.execute_fetchall("""
-            SELECT u.user_id, u.gender, u.age FROM users u
-            LEFT JOIN blocks b1 ON b1.blocker_id = ? AND b1.blocked_id = u.user_id
-            LEFT JOIN blocks b2 ON b2.blocker_id = u.user_id AND b2.blocked_id = ?
-            WHERE u.user_id != ?
-            AND u.age BETWEEN ? AND ?
-            AND b1.blocked_id IS NULL
-            AND b2.blocked_id IS NULL
-            ORDER BY u.boost_until > ? DESC, RANDOM()
-        """, (user_id, user_id, user_id, pref_min, pref_max, now))
-
-        candidates = []
-        for row in rows:
-            cand_id, cand_gender, cand_age = row
-            cand_pref = (await get_user(cand_id))[2]
-            if (cand_pref == "all" or cand_pref == my_gender) and (pref_gender == "all" or pref_gender == cand_gender):
-                candidates.append((cand_id, cand_gender, cand_age))
-
-        if candidates:
-            return choice(candidates)
-    return None
-
-# === КОМАНДЫ ===
-@dp.message(Command("start"))
-async def start(message: types.Message, state: FSMContext):
-    user = await get_user(message.from_user.id)
-    
-    if message.from_user.id == ADMIN_ID:
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (ADMIN_ID,))
-            await db.commit()
-    
-    help_text = (
-        "👋 Добро пожаловать в анонимные знакомства!\n\n"
-        "Команды:\n"
-        "/search — найти анкету\n"
-        "/stop — завершить чат\n"
-        "/reset — удалить профиль\n"
-        "/like — взаимные симпатии\n"
-        "/premium — премиум-фичи (тест)\n"
-        "/help — руководство\n\n"
-        "Удачных знакомств ❤️"
-    )
-    
-    if user:
-        await message.answer(f"{help_text}\n\nТы зарегистрирован! Жми /search")
-    else:
-        await message.answer(f"{help_text}\n\nДавай зарегистрируемся! Выбери пол:",
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                 [InlineKeyboardButton(text="Мужской", callback_data="gender_m")],
-                                 [InlineKeyboardButton(text="Женский", callback_data="gender_f")]
-                             ]))
-        await state.set_state(Reg.gender)
-
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    await message.answer(
-        "📖 <b>Руководство</b>\n\n"
-        "/search — искать анкеты\n"
-        "/stop — завершить чат (потом отзыв)\n"
-        "/reset — начать заново\n"
-        "/like — взаимные симпатии после чата\n"
-        "/premium — купить VIP/буст/суперлайк (тест)\n"
-        "/help — это меню\n\n"
-        "После взаимного лайка — сразу чат 💕",
-        parse_mode="HTML"
-    )
-
-@dp.callback_query(F.data.startswith("gender_"))
-async def process_gender(callback: types.CallbackQuery, state: FSMContext):
-    gender = "m" if callback.data == "gender_m" else "f"
-    await state.update_data(gender=gender)
-    await callback.message.edit_text("Кого ищешь?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Парней", callback_data="pref_m")],
-        [InlineKeyboardButton(text="Девушек", callback_data="pref_f")],
-        [InlineKeyboardButton(text="Всех", callback_data="pref_all")]
-    ]))
-    await state.set_state(Reg.pref_gender)
-
-@dp.callback_query(F.data.startswith("pref_"))
-async def process_pref_gender(callback: types.CallbackQuery, state: FSMContext):
-    pref = callback.data.split("_")[1]
-    await state.update_data(pref_gender=pref)
-    await callback.message.edit_text("Сколько тебе лет? (напиши число)")
-    await state.set_state(Reg.age)
-
-@dp.message(Reg.age)
-async def process_age(message: types.Message, state: FSMContext):
-    if not message.text.isdigit() or not 16 <= int(message.text) <= 100:
-        await message.answer("Введите реальный возраст (16–100)")
-        return
-    await state.update_data(age=int(message.text))
-    await message.answer("Минимальный возраст собеседника?")
-    await state.set_state(Reg.pref_age_min)
-
-@dp.message(Reg.pref_age_min)
-async def process_min_age(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Напиши число!")
-        return
-    await state.update_data(pref_age_min=int(message.text))
-    await message.answer("Максимальный возраст собеседника?")
-    await state.set_state(Reg.pref_age_max)
-
-@dp.message(Reg.pref_age_max)
-async def process_max_age(message: types.Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Напиши число!")
-        return
-    data = await state.get_data()
-    max_age = int(message.text)
-    if data["pref_age_min"] > max_age:
-        await message.answer("Минимальный возраст не может быть больше максимального!")
-        return
-    await add_user(message.from_user.id, data["gender"], data["pref_gender"], data["age"], data["pref_age_min"], max_age)
-    await message.answer("Регистрация завершена! 🔥\nТеперь используй /search")
-    await state.clear()
-
-@dp.message(Command("search"))
-async def search(message: types.Message):
-    match = await find_match(message.from_user.id)
-    if not match:
-        await message.answer("Пока никого нет по твоим критериям 😔\nПопробуй позже или измени настройки (/reset)")
-        return
-    match_id, gender, age = match
-    gender_text = "Парень" if gender == "m" else "Девушка"
-    await message.answer(
-        f"Нашёл анкету!\n{gender_text}, {age} лет\n\n❤️ или 👎?",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{match_id}")],
-            [InlineKeyboardButton(text="👎 Дислайк", callback_data=f"dislike_{match_id}")]
-        ])
-    )
-
-@dp.callback_query(F.data.startswith("dislike_"))
-async def dislike(callback: types.CallbackQuery):
-    target_id = int(callback.data.split("_")[1])
-    my_id = callback.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", (my_id, target_id))
-        await db.commit()
-    await callback.message.edit_text("👎 Дислайк. Ищем следующую анкету...")
-    await search(callback.message)
-
-@dp.callback_query(F.data.startswith("like_"))
-async def like(callback: types.CallbackQuery):
-    target_id = int(callback.data.split("_")[1])
-    my_id = callback.from_user.id
-    target_match = await find_match(target_id)
-    if target_match and target_match[0] == my_id:
-        active_chats[my_id] = target_id
-        active_chats[target_id] = my_id
-        await callback.message.edit_text("💕 Взаимный лайк! Чат открыт — пиши сообщение!")
-        await bot.send_message(target_id, "💕 Взаимный лайк! Чат открыт — пиши сообщение!")
-    else:
-        await callback.message.edit_text("❤️ Лайк отправлен. Ждём ответа...")
-        await search(callback.message)
-
-@dp.message(Command("stop"))
-async def stop_chat(message: types.Message):
-    partner = active_chats.get(message.from_user.id)
-    if not partner:
-        await message.answer("Ты не в чате.")
-        return
-    my_id = message.from_user.id
-    del active_chats[my_id]
-    del active_chats[partner]
-    await message.answer("Чат завершён.\n\nКак тебе собеседник?",
-                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                             [InlineKeyboardButton(text="❤️ Понравился", callback_data=f"feedback_like_{partner}")],
-                             [InlineKeyboardButton(text="👎 Не очень", callback_data=f"feedback_dislike_{partner}")]
-                         ]))
-    await bot.send_message(partner, "Собеседник завершил чат.")
-
-@dp.callback_query(F.data.startswith("feedback_like_"))
-async def feedback_like(callback: types.CallbackQuery):
-    target_id = int(callback.data.split("_")[2])
-    my_id = callback.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO chat_likes (user1_id, user2_id) VALUES (?, ?)", (my_id, target_id))
-        await db.commit()
-        async with db.execute("SELECT 1 FROM chat_likes WHERE user1_id = ? AND user2_id = ?", (target_id, my_id)) as cursor:
-            mutual = await cursor.fetchone()
-    if mutual:
-        await callback.message.edit_text("❤️ Вы оба понравились друг другу! Найди в /like")
-    else:
-        await callback.message.edit_text("❤️ Спасибо! Если он тоже лайкнет — появится в /like")
-
-@dp.callback_query(F.data.startswith("feedback_dislike_"))
-async def feedback_dislike(callback: types.CallbackQuery):
-    target_id = int(callback.data.split("_")[2])
-    my_id = callback.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?), (?, ?)", (my_id, target_id, target_id, my_id))
-        await db.commit()
-    await callback.message.edit_text("👎 Этот человек больше не появится в поиске.")
-
-@dp.message(Command("like"))
-async def show_matches(message: types.Message):
-    my_id = message.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("""
-            SELECT u.user_id, u.gender, u.age FROM chat_likes cl
-            JOIN users u ON u.user_id = cl.user2_id
-            WHERE cl.user1_id = ?
-            AND EXISTS (SELECT 1 FROM chat_likes WHERE user1_id = cl.user2_id AND user2_id = cl.user1_id)
-        """, (my_id,)) as cursor:
-            matches = await cursor.fetchall()
-    if not matches:
-        await message.answer("Пока нет взаимных симпатий после чата 😔")
-        return
-    text = "💕 <b>Взаимные симпатии:</b>\n\n"
-    keyboard = []
-    for m_id, gender, age in matches:
-        g_text = "Парень" if gender == "m" else "Девушка"
-        text += f"• {g_text}, {age} лет\n"
-        keyboard.append([InlineKeyboardButton(text="Написать снова", callback_data=f"rematch_{m_id}")])
-    await message.answer(text + "\nНажми кнопку, чтобы возобновить чат!", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
-
-@dp.callback_query(F.data.startswith("rematch_"))
-async def rematch(callback: types.CallbackQuery):
-    target_id = int(callback.data.split("_")[1])
-    my_id = callback.from_user.id
-    active_chats[my_id] = target_id
-    active_chats[target_id] = my_id
-    await callback.message.edit_text("💬 Чат возобновлён!")
-    await bot.send_message(target_id, "💬 Твой прошлый собеседник хочет продолжить! Чат возобновлён.")
-
-@dp.message(Command("reset"))
-async def reset_profile(message: types.Message):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("DELETE FROM users WHERE user_id = ?", (message.from_user.id,))
-        await db.execute("DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?", (message.from_user.id, message.from_user.id))
-        await db.execute("DELETE FROM chat_likes WHERE user1_id = ? OR user2_id = ?", (message.from_user.id, message.from_user.id))
-        await db.commit()
-    if message.from_user.id in active_chats:
-        partner = active_chats.pop(message.from_user.id)
-        active_chats.pop(partner, None)
-        await bot.send_message(partner, "Собеседник удалил профиль.")
-    await message.answer("Профиль удалён. /start — начать заново")
-
-@dp.message(Command("debug"))
-async def debug(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("Только для админа.")
-        return
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT COUNT(*) FROM users") as cursor:
-            total = (await cursor.fetchone())[0]
-    await message.answer(f"Анкет в базе: {total}")
-
-@dp.message(Command("premium"))
-async def premium_menu(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 VIP навсегда — 149₽ (тест)", callback_data="buy_vip")],
-        [InlineKeyboardButton(text="🚀 Буст 24ч — 49₽ (тест)", callback_data="buy_boost")],
-        [InlineKeyboardButton(text="💌 Суперлайк — 29₽ (тест)", callback_data="buy_superlike")],
-        [InlineKeyboardButton(text="🆓 Ребус (VIP на 14 дней)", url=CHANNEL_LINK)]
-    ])
-    await message.answer(
-        "💎 <b>Премиум-фичи</b> (тестовый режим)\n\n"
-        "Нажми кнопку — получишь фичу бесплатно для проверки!\n\n"
-        "• VIP навсегда — видишь ник + буст + суперлайки\n"
-        "• Буст — анкета №1 в поиске 24ч\n"
-        "• Суперлайк — уведомление собеседнику\n\n"
-        "Реальные платежи подключим позже.",
-        reply_markup=keyboard, parse_mode="HTML"
-    )
-
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_q: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_q.id, ok=True)
-
-@dp.callback_query(F.data.in_({"buy_vip", "buy_boost", "buy_superlike"}))
-async def send_test_invoice(callback: types.CallbackQuery):
-    await callback.answer()  # Убирает "часики" — обязательно!
-
-    data = callback.data
-    user_id = callback.from_user.id
-    now = int(time.time())
-
-    if data == "buy_vip":
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET is_vip = 1, vip_until = 0 WHERE user_id = ?", (user_id,))
-            await db.commit()
-        await callback.message.edit_text("🎉 VIP навсегда активирован (тест)! Всё работает ❤️")
-    elif data == "buy_boost":
-        boost_until = now + 86400
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET boost_until = ? WHERE user_id = ?", (boost_until, user_id))
-            await db.commit()
-        await callback.message.edit_text("🚀 Буст активирован на 24 часа (тест)!")
-    elif data == "buy_superlike":
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET superlikes = superlikes + 1 WHERE user_id = ?", (user_id,))
-            await db.commit()
-        await callback.message.edit_text("💌 Суперлайк куплен (тест)!")
-
-@dp.message(Command("9889"))
-async def activate_rebus_vip(message: types.Message):
-    user_id = message.from_user.id
-    
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT used FROM rebus_used WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row and row[0] == 1:
-                await message.answer("❌ Ты уже активировал VIP по ребусу! Один раз на аккаунт — навсегда.")
+    async def on_submit(self, interaction: discord.Interaction):
+        # Моментально отвечаем пользователю, чтобы Discord не закрывал сессию
+        await interaction.response.send_message("Ваша заявка успешно отправлена на рассмотрение!", ephemeral=True)
+        
+        try:
+            guild = interaction.guild
+            channel = bot.get_channel(CHANNEL_APPLICATIONS_ID)
+            
+            if not guild:
+                print("[ОШИБКА] Бот не может найти сервер (guild равен None).")
                 return
-        
-        async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            if not await cursor.fetchone():
-                await message.answer("Сначала зарегистрируйся: /start")
+            if not channel:
+                print(f"[ОШИБКА] Бот не может найти канал с ID {CHANNEL_APPLICATIONS_ID}. Проверьте правильность ID!")
                 return
+
+            # Имя пользователя для новых версий discord.py
+            username = interaction.user.global_name if interaction.user.global_name else interaction.user.name
+
+            # Собираем красивый эмбед из обеих частей анкеты
+            embed = discord.Embed(title="New Application! | Новая заявка", color=discord.Color.blurple())
+            embed.set_author(name=username, icon_url=interaction.user.display_avatar.url)
+            
+            # Данные из Части 1
+            embed.add_field(name="Как вас зовут", value=self.part1_data['name'], inline=False)
+            embed.add_field(name="Сколько вам лет (13+)", value=self.part1_data['age'], inline=False)
+            embed.add_field(name="Ваша адекватность (от 0 до 10)", value=self.part1_data['adeq'], inline=False)
+            embed.add_field(name="Насколько вы хороши в ХВХ (от 1 до 10)", value=self.part1_data['hvh'], inline=False)
+            embed.add_field(name="Насколько вы хороши в PVE (от 1 до 10)", value=self.part1_data['pve'], inline=False)
+            
+            # Данные из Части 2
+            embed.add_field(name="С каким читом вы играете", value=self.cheat.value, inline=False)
+            embed.add_field(name="Имеете ли вы хороший микрофон?", value=self.mic.value, inline=False)
+            embed.add_field(name="Сколько часов можете проводить с нами?", value=self.hours.value, inline=False)
+            embed.add_field(name="Какой у вас часовой пояс?", value=self.tz.value, inline=False)
+            
+            embed.set_footer(text=f"User ID: {interaction.user.id}")
+
+            view = RecruitDecisionView(applicant_id=interaction.user.id)
+            
+            # Простой и надежный тег роли через упоминание
+            mention_text = f"<@&{ROLE_RECRUIT_ID}> Поступила новая заявка!"
+            
+            # Отправляем сообщение в чат
+            await channel.send(content=mention_text, embed=embed, view=view)
+            print("[УСПЕХ] Заявка успешно отправлена в канал!")
+
+        except discord.Forbidden:
+            print("[КРИТИЧЕСКАЯ ОШИБКА] У бота НЕТ ПРАВ на отправку сообщений или эмбедов в этот канал!")
+        except Exception as e:
+            print("[НЕИЗВЕСТНАЯ ОШИБКА] Произошел сбой при отправке:")
+            traceback.print_exc()
+
+
+# Промежуточная кнопка для вызова второй части анкеты
+class NextPartView(View):
+    def __init__(self, part1_data):
+        super().__init__(timeout=300)
+        self.part1_data = part1_data
+
+    @discord.ui.button(label="Продолжить заполнение (Часть 2)", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(ApplicationModalPart2(part1_data=self.part1_data))
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
+
+# ПЕРВАЯ ЧАСТЬ АНКЕТЫ (5 вопросов)
+class ApplicationModalPart1(Modal, title="Заявка в loveSquad (Часть 1/2)"):
+    name_input = TextInput(label="Как вас зовут", placeholder="Ваше имя...", max_length=50)
+    age = TextInput(label="Сколько вам лет (13+)", placeholder="Ваш реальный возраст...", min_length=1, max_length=3)
+    adeq = TextInput(label="Ваша адекватность (от 0 до 10)", placeholder="Оцените себя честно...", min_length=1, max_length=2)
+    hvh = TextInput(label="Насколько вы хороши в ХВХ (от 1 до 10)", placeholder="Уровень игры...", min_length=1, max_length=2)
+    pve = TextInput(label="Насколько вы хороши в PVE (от 1 до 10)", placeholder="Уровень игры...", min_length=1, max_length=2)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        data = {
+            'name': self.name_input.value,
+            'age': self.age.value,
+            'adeq': self.adeq.value,
+            'hvh': self.hvh.value,
+            'pve': self.pve.value
+        }
+        await interaction.response.send_message(
+            "Отлично! Первая часть сохранена. Нажмите кнопку ниже, чтобы ответить на оставшиеся вопросы.", 
+            view=NextPartView(part1_data=data), 
+            ephemeral=True
+        )
+
+
+# Кнопка отправки анкеты в главном меню
+class MainMenuView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Подать заявку в loveSquad", style=discord.ButtonStyle.green, custom_id="apply_btn")
+    async def apply_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(ApplicationModalPart1())
+
+
+# Кнопки для рекрутеров (Принять/Отклонить)
+class RecruitDecisionView(View):
+    def __init__(self, applicant_id: int):
+        super().__init__(timeout=None)
+        self.applicant_id = applicant_id
+
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.success, custom_id="accept_btn")
+    async def accept(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        member = guild.get_member(self.applicant_id)
         
-        now = int(time.time())
-        vip_until = now + 14 * 86400
+        if not member:
+            await interaction.response.send_message("Пользователь покинул сервер.", ephemeral=True)
+            return
+
+        roles_to_add = [guild.get_role(role_id) for role_id in ROLE_ACCEPTED_IDS if guild.get_role(role_id)]
+        if roles_to_add:
+            await member.add_roles(*roles_to_add)
+            
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.title = "Заявка ПРИНЯТА"
+        embed.add_field(name="Вердикт", value=f"Принят рекрутером {interaction.user.mention}", inline=False)
         
-        await db.execute("UPDATE users SET is_vip = 1, vip_until = ? WHERE user_id = ?", (vip_until, user_id))
-        await db.execute("INSERT OR REPLACE INTO rebus_used (user_id, used) VALUES (?, 1)", (user_id,))
-        await db.commit()
-    
-    await message.answer("🎉 VIP по ребусу активирован на 14 дней!\nСпасибо, что решил ребус 🧠")
+        for child in self.children:
+            child.disabled = True
+            
+        await interaction.response.edit_message(embed=embed, view=self)
+        
+        try:
+            await member.send("Поздравляем! Ваша заявка в **loveSquad** была принята! Добро пожаловать.")
+        except discord.Forbidden:
+            pass
 
-@dp.message()
-async def forward_message(message: types.Message):
-    partner = active_chats.get(message.from_user.id)
-    if not partner:
-        return
+    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.danger, custom_id="reject_btn")
+    async def reject(self, interaction: discord.Interaction, button: Button):
+        guild = interaction.guild
+        member = guild.get_member(self.applicant_id)
 
-    receiver_vip = await is_vip_active(partner)
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.title = "Заявка ОТКЛОНЕНА"
+        embed.add_field(name="Вердикт", value=f"Отклонен рекрутером {interaction.user.mention}", inline=False)
 
-    sender_prefix = ""
-    if message.from_user.id == ADMIN_ID:
-        sender_prefix = "От: 👑 Создатель\n\n"
-    elif receiver_vip:
-        username = message.from_user.username or message.from_user.full_name
-        sender_prefix = f"От: @{username}\n\n" if message.from_user.username else f"От: {message.from_user.full_name}\n\n"
+        for child in self.children:
+            child.disabled = True
 
-    try:
-        if message.text:
-            await bot.send_message(partner, sender_prefix + message.text)
-        elif message.photo:
-            await bot.send_photo(partner, message.photo[-1].file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.video:
-            await bot.send_video(partner, message.video.file_id, caption=sender_prefix + (message.caption or ""))
-        elif message.voice:
-            await bot.send_voice(partner, message.voice.file_id, caption=sender_prefix)
-        elif message.sticker:
-            await bot.send_sticker(partner, message.sticker.file_id)
-        else:
-            await bot.copy_message(partner, message.from_user.id, message.message_id)
-    except:
-        pass
+        await interaction.response.edit_message(embed=embed, view=self)
 
-async def main():
-    await init_db()
-    await dp.start_polling(bot)
+        if member:
+            try:
+                await member.send("К сожалению, ваша заявка в **loveSquad** была отклонена.")
+            except discord.Forbidden:
+                pass
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@bot.event
+async def on_ready():
+    print(f"Бот запущен под именем {bot.user}")
+    bot.add_view(MainMenuView())
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+    embed = discord.Embed(
+        title="Набор в loveSquad open!",
+        description="Хочешь стать частью нашей команды? Нажми на кнопку ниже и заполни небольшую анкету!",
+        color=discord.Color.pink()
+    )
+    await ctx.send(embed=embed, view=MainMenuView())
+
+bot.run(TOKEN)
